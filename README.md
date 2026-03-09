@@ -42,15 +42,28 @@ the COCO-17 JSON schema used by YOLO / RTMPose output.
 
 ## Installation
 
+**Option A — pip virtual environment (recommended for standalone use)**
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-Or with conda (Ravens environment already includes all dependencies):
+**Option B — conda**
+```bash
+conda create -n keypoint-editor python=3.10
+conda activate keypoint-editor
+pip install -r requirements.txt
+```
 
+**Option C — existing Ravens conda environment (dependencies already present)**
 ```bash
 conda activate ravens
 ```
+
+> **Linux note:** If you see a Qt `xcb` platform plugin error, replace `opencv-python`
+> with `opencv-python-headless` in your environment — the bundled Qt libs in the
+> standard OpenCV wheel conflict with PyQt5 on some distros.
 
 ## Usage
 
@@ -58,12 +71,16 @@ conda activate ravens
 # Setup dialog (recommended — remembers last session)
 python keypoint_editor.py
 
-# Pre-fill folders from command line (dialog still shown for confirmation)
+# Pre-fill folders from command line (skips dialog if all required paths are valid)
 python keypoint_editor.py \
   --videos    /path/to/data/ \
-  --poses     /path/to/outputs/poses_yolo11x/ \
+  --poses     /path/to/outputs/ \
   --features  /path/to/outputs/features/ \
   --anomalies /path/to/outputs/features/
+
+# --poses is the PARENT folder containing per-model subfolders
+# (e.g. outputs/poses_yolo11x/, outputs/poses_rtmpose_body17/, …)
+# All available models appear in a dropdown when a player is selected.
 
 # Start directly in Editor mode
 python keypoint_editor.py --edit
@@ -91,8 +108,8 @@ The editor matches files across folders by `player_id` stem:
 
 | Type | Expected path |
 |------|--------------|
-| Video | `<video_folder>/<player_id>.mp4` |
-| Keypoints | `<poses_folder>/<player_id>.json` |
+| Video | `<video_folder>/<player_id>.mp4` (also handles `YYYY NIC NAME DL##.mp4` format) |
+| Keypoints | `<poses_parent>/<model_name>/<player_id>.json` |
 | Features | Any `*.csv` with a `player_id` column in the features folder |
 | Anomalies | Any `*.csv` with `player_id`, `frame`, `is_low_prob` columns |
 

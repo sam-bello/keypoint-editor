@@ -27,6 +27,7 @@ Controls:
 
 import sys
 import os
+import re
 import csv as _csv
 import json
 import math
@@ -175,6 +176,14 @@ def _mid(a, b):
     if a is None or b is None:
         return None
     return (a + b) / 2.0
+
+
+def _coalesce(*args):
+    """Return first non-None value (safe for numpy arrays)."""
+    for a in args:
+        if a is not None:
+            return a
+    return None
 
 
 def _fmt_angle(v) -> str:
@@ -354,7 +363,7 @@ class AngleOverlay:
         pen = QPen(self._color, 2)
         pen.setCapStyle(Qt.RoundCap)
         item.setPen(pen)
-        item.setBrush(Qt.NoBrush)
+        item.setBrush(QBrush(Qt.NoBrush))
         item.setZValue(6)
         item.setAcceptedMouseButtons(Qt.NoButton)
         item.setVisible(False)
@@ -421,9 +430,9 @@ class HipHingeOverlay(AngleOverlay):
         l_sh = _pt(kps, 5);  r_sh = _pt(kps, 6)
         l_hp = _pt(kps, 11); r_hp = _pt(kps, 12)
         l_kn = _pt(kps, 13); r_kn = _pt(kps, 14)
-        mid_sh  = _mid(l_sh,  r_sh)  or l_sh  or r_sh
-        mid_hip = _mid(l_hp,  r_hp)  or l_hp  or r_hp
-        mid_kn  = _mid(l_kn,  r_kn)  or l_kn  or r_kn
+        mid_sh  = _coalesce(_mid(l_sh,  r_sh),  l_sh,  r_sh)
+        mid_hip = _coalesce(_mid(l_hp,  r_hp),  l_hp,  r_hp)
+        mid_kn  = _coalesce(_mid(l_kn,  r_kn),  l_kn,  r_kn)
         if any(p is None for p in [mid_sh, mid_hip, mid_kn]):
             return False
         bx, by = float(mid_hip[0]), float(mid_hip[1])
@@ -458,8 +467,8 @@ class TorsoLeanOverlay(AngleOverlay):
     def _update(self, kps: np.ndarray) -> bool:
         l_sh = _pt(kps, 5);  r_sh = _pt(kps, 6)
         l_hp = _pt(kps, 11); r_hp = _pt(kps, 12)
-        mid_sh  = _mid(l_sh, r_sh) or l_sh or r_sh
-        mid_hip = _mid(l_hp, r_hp) or l_hp or r_hp
+        mid_sh  = _coalesce(_mid(l_sh, r_sh), l_sh, r_sh)
+        mid_hip = _coalesce(_mid(l_hp, r_hp), l_hp, r_hp)
         if mid_sh is None or mid_hip is None:
             return False
         bx, by = float(mid_hip[0]), float(mid_hip[1])
@@ -616,7 +625,7 @@ class FeaturePanel(QWidget):
 
         # ── Live angles section ────────────────────────────────────────────────
         live_hdr = QLabel("Current Frame")
-        live_hdr.setStyleSheet("color:#aaa; font-size:10px; font-weight:bold; "
+        live_hdr.setStyleSheet("color:#aaa; font-size:12px; font-weight:bold; "
                                "border-bottom:1px solid #444; padding-bottom:2px;")
         vbox.addWidget(live_hdr)
 
@@ -626,10 +635,10 @@ class FeaturePanel(QWidget):
         live_form.setLabelAlignment(Qt.AlignRight)
         for label, key, _ in self._LIVE_ROWS:
             lbl_k = QLabel(label + ":")
-            lbl_k.setStyleSheet("color:#999; font-size:11px;")
+            lbl_k.setStyleSheet("color:#999; font-size:12px;")
             lbl_k.setToolTip(self._LIVE_TIPS.get(key, ""))
             lbl_v = QLabel("—")
-            lbl_v.setStyleSheet("color:#ddd; font-size:11px; font-weight:bold;")
+            lbl_v.setStyleSheet("color:#ddd; font-size:12px; font-weight:bold;")
             lbl_v.setToolTip(self._LIVE_TIPS.get(key, ""))
             live_form.addRow(lbl_k, lbl_v)
             self._live_labels[key] = lbl_v
@@ -638,12 +647,12 @@ class FeaturePanel(QWidget):
         # ── Aggregate stats section ────────────────────────────────────────────
         vbox.addSpacing(10)
         self._agg_hdr = QLabel("Aggregate (Arc-wide)")
-        self._agg_hdr.setStyleSheet("color:#aaa; font-size:10px; font-weight:bold; "
+        self._agg_hdr.setStyleSheet("color:#aaa; font-size:12px; font-weight:bold; "
                                     "border-bottom:1px solid #444; padding-bottom:2px;")
         vbox.addWidget(self._agg_hdr)
 
         self._agg_na = QLabel("No features CSV loaded")
-        self._agg_na.setStyleSheet("color:#666; font-size:10px; font-style:italic;")
+        self._agg_na.setStyleSheet("color:#666; font-size:12px; font-style:italic;")
         vbox.addWidget(self._agg_na)
 
         self._agg_labels: dict[str, QLabel] = {}
@@ -652,9 +661,9 @@ class FeaturePanel(QWidget):
         self._agg_form.setLabelAlignment(Qt.AlignRight)
         for label, key in self._AGG_ROWS:
             lbl_k = QLabel(label + ":")
-            lbl_k.setStyleSheet("color:#999; font-size:11px;")
+            lbl_k.setStyleSheet("color:#999; font-size:12px;")
             lbl_v = QLabel("—")
-            lbl_v.setStyleSheet("color:#ccc; font-size:11px;")
+            lbl_v.setStyleSheet("color:#ccc; font-size:12px;")
             self._agg_form.addRow(lbl_k, lbl_v)
             self._agg_labels[key] = lbl_v
         vbox.addLayout(self._agg_form)
@@ -674,7 +683,7 @@ class FeaturePanel(QWidget):
         if angles is None:
             for lbl in self._live_labels.values():
                 lbl.setText("—")
-                lbl.setStyleSheet("color:#888; font-size:11px; font-weight:bold;")
+                lbl.setStyleSheet("color:#888; font-size:12px; font-weight:bold;")
             return
         for _, key, color_key in self._LIVE_ROWS:
             v = angles.get(key)
@@ -684,7 +693,7 @@ class FeaturePanel(QWidget):
             else:
                 lbl.setText(_fmt_angle(v))
             css_color = _color_for_angle(color_key or "", v) if color_key else "#ddd"
-            lbl.setStyleSheet(f"color:{css_color}; font-size:11px; font-weight:bold;")
+            lbl.setStyleSheet(f"color:{css_color}; font-size:12px; font-weight:bold;")
 
     def load_player_agg(self, feature_row: dict | None, player_id: str = ""):
         """Populate aggregate section from a feature CSV row dict."""
@@ -1003,7 +1012,7 @@ class PlayerItemWidget(QWidget):
         top.addWidget(lbl_name)
         top.addStretch()
         lbl_year = QLabel(str(year) if year else "")
-        lbl_year.setStyleSheet("color:#777; font-size:10px;")
+        lbl_year.setStyleSheet("color:#777; font-size:12px;")
         top.addWidget(lbl_year)
         layout.addLayout(top)
 
@@ -1011,11 +1020,11 @@ class PlayerItemWidget(QWidget):
         bot = QHBoxLayout()
         bot.setSpacing(6)
         lbl_pos = QLabel(pos)
-        lbl_pos.setStyleSheet("color:#666; font-size:10px;")
+        lbl_pos.setStyleSheet("color:#666; font-size:12px;")
         bot.addWidget(lbl_pos)
         if n_frames:
             lbl_frames = QLabel(f"{n_frames} fr")
-            lbl_frames.setStyleSheet("color:#555; font-size:9px;")
+            lbl_frames.setStyleSheet("color:#555; font-size:12px;")
             bot.addWidget(lbl_frames)
         bot.addStretch()
         for letter, available, tip in [
@@ -1027,9 +1036,9 @@ class PlayerItemWidget(QWidget):
             dot.setFixedWidth(14)
             dot.setAlignment(Qt.AlignCenter)
             if available:
-                dot.setStyleSheet("color:#69f0ae; font-size:9px;")
+                dot.setStyleSheet("color:#69f0ae; font-size:12px;")
             else:
-                dot.setStyleSheet("color:#444; font-size:9px;")
+                dot.setStyleSheet("color:#444; font-size:12px;")
             dot.setToolTip(tip if available else f"{tip[:-5]} not found")
             bot.addWidget(dot)
         layout.addLayout(bot)
@@ -1067,7 +1076,7 @@ class SetupDialog(QDialog):
 
         layout.addWidget(self._hdr("Session Setup", size=14, bold=True))
         layout.addWidget(self._hdr("Select folders containing pose data.  "
-                                   "Fields marked * are required.", color="#888", size=10))
+                                   "Fields marked * are required.", color="#a8c0d8", size=12))
         layout.addSpacing(4)
 
         # ── Video folder ──────────────────────────────────────────────────────
@@ -1079,12 +1088,14 @@ class SetupDialog(QDialog):
         )
         layout.addWidget(vid_grp)
 
-        # ── Poses folder ──────────────────────────────────────────────────────
+        # ── Poses parent folder ───────────────────────────────────────────────
         self._pose_edit, pose_grp = self._folder_row(
-            "Keypoints Folder  *",
-            "Folder with per-player pose JSON files  "
-            "(e.g. outputs/poses_yolo11x/ — one .json per player)",
-            init_poses or self._settings.value("last_poses_folder", ""),
+            "Keypoints Parent Folder  *",
+            "Parent folder containing per-model subfolders of pose JSONs  "
+            "(e.g. outputs/ — subfolders like poses_yolo11x/, poses_rtmpose_body17/ "
+            "each containing one .json per player)",
+            init_poses or self._settings.value("last_poses_parent",
+                          self._settings.value("last_poses_folder", "")),
         )
         layout.addWidget(pose_grp)
 
@@ -1110,7 +1121,7 @@ class SetupDialog(QDialog):
         layout.addWidget(self._feat_csv_row)
 
         self._feat_status = QLabel("")
-        self._feat_status.setStyleSheet("color:#888; font-size:10px; font-style:italic;")
+        self._feat_status.setStyleSheet("color:#a8c0d8; font-size:12px; font-style:italic;")
         layout.addWidget(self._feat_status)
 
         # ── Anomaly folder ────────────────────────────────────────────────────
@@ -1134,7 +1145,7 @@ class SetupDialog(QDialog):
         layout.addWidget(self._anom_csv_row)
 
         self._anom_status = QLabel("")
-        self._anom_status.setStyleSheet("color:#888; font-size:10px; font-style:italic;")
+        self._anom_status.setStyleSheet("color:#a8c0d8; font-size:12px; font-style:italic;")
         layout.addWidget(self._anom_status)
 
         # ── Buttons ───────────────────────────────────────────────────────────
@@ -1178,8 +1189,8 @@ class SetupDialog(QDialog):
                     required: bool = True):
         grp = QGroupBox(title)
         grp.setStyleSheet(
-            "QGroupBox { color:#aaa; font-size:11px; border:1px solid #444; "
-            "border-radius:4px; margin-top:6px; padding-top:6px; }"
+            "QGroupBox { color:#d4d4d4; font-size:12px; border:1px solid #444; "
+            "border-radius:4px; margin-top:8px; padding-top:8px; }"
             "QGroupBox::title { subcontrol-origin:margin; left:8px; }"
         )
         v = QVBoxLayout(grp)
@@ -1197,7 +1208,7 @@ class SetupDialog(QDialog):
         h.addWidget(browse)
         v.addLayout(h)
         hint_lbl = QLabel(hint)
-        hint_lbl.setStyleSheet("color:#666; font-size:9px;")
+        hint_lbl.setStyleSheet("color:#a8c0d8; font-size:12px;")
         hint_lbl.setWordWrap(True)
         v.addWidget(hint_lbl)
         return edit, grp
@@ -1234,18 +1245,18 @@ class SetupDialog(QDialog):
         elif not matches:
             self._feat_csv_row.hide()
             self._feat_status.setText("No CSVs with 'player_id' column found in this folder")
-            self._feat_status.setStyleSheet("color:#f88; font-size:10px; font-style:italic;")
+            self._feat_status.setStyleSheet("color:#f88; font-size:12px; font-style:italic;")
         elif len(matches) == 1:
             self._feat_csv_row.hide()
             self._feat_status.setText(f"Found: {matches[0].name}")
-            self._feat_status.setStyleSheet("color:#69f0ae; font-size:10px; font-style:italic;")
+            self._feat_status.setStyleSheet("color:#69f0ae; font-size:12px; font-style:italic;")
             self._feat_csv_combo.addItem(str(matches[0]))
         else:
             for m in matches:
                 self._feat_csv_combo.addItem(str(m), str(m))
             self._feat_csv_row.show()
             self._feat_status.setText(f"Found {len(matches)} CSVs — select one:")
-            self._feat_status.setStyleSheet("color:#ffcc02; font-size:10px; font-style:italic;")
+            self._feat_status.setStyleSheet("color:#ffcc02; font-size:12px; font-style:italic;")
 
     def _on_anom_folder_changed(self, text: str):
         matches = self._find_csvs(text, ["player_id", "frame", "is_low_prob"])
@@ -1257,18 +1268,18 @@ class SetupDialog(QDialog):
             self._anom_csv_row.hide()
             self._anom_status.setText(
                 "No CSVs with 'player_id', 'frame', 'is_low_prob' columns found")
-            self._anom_status.setStyleSheet("color:#f88; font-size:10px; font-style:italic;")
+            self._anom_status.setStyleSheet("color:#f88; font-size:12px; font-style:italic;")
         elif len(matches) == 1:
             self._anom_csv_row.hide()
             self._anom_status.setText(f"Found: {matches[0].name}")
-            self._anom_status.setStyleSheet("color:#69f0ae; font-size:10px; font-style:italic;")
+            self._anom_status.setStyleSheet("color:#69f0ae; font-size:12px; font-style:italic;")
             self._anom_csv_combo.addItem(str(matches[0]))
         else:
             for m in matches:
                 self._anom_csv_combo.addItem(str(m), str(m))
             self._anom_csv_row.show()
             self._anom_status.setText(f"Found {len(matches)} CSVs — select one:")
-            self._anom_status.setStyleSheet("color:#ffcc02; font-size:10px; font-style:italic;")
+            self._anom_status.setStyleSheet("color:#ffcc02; font-size:12px; font-style:italic;")
 
     def _validate(self):
         ok = (Path(self._vid_edit.text()).is_dir() and
@@ -1294,7 +1305,7 @@ class SetupDialog(QDialog):
             self.anomaly_csv = ""
         # Persist
         self._settings.setValue("last_video_folder",    self.video_folder)
-        self._settings.setValue("last_poses_folder",    self.poses_folder)
+        self._settings.setValue("last_poses_parent",    self.poses_folder)
         self._settings.setValue("last_features_folder",
                                 Path(self.features_csv).parent.as_posix()
                                 if self.features_csv else "")
@@ -1322,7 +1333,7 @@ class PlayerListPanel(QWidget):
         # Header
         hdr = QHBoxLayout()
         self._lbl_count = QLabel("Players")
-        self._lbl_count.setStyleSheet("color:#aaa; font-size:11px; font-weight:bold;")
+        self._lbl_count.setStyleSheet("color:#aaa; font-size:12px; font-weight:bold;")
         hdr.addWidget(self._lbl_count)
         hdr.addStretch()
 
@@ -1331,7 +1342,7 @@ class PlayerListPanel(QWidget):
         sort_btn.setText("Sort ▾")
         sort_btn.setPopupMode(QToolButton.InstantPopup)
         sort_btn.setToolTip("Sort player list")
-        sort_btn.setStyleSheet("font-size:10px; color:#888;")
+        sort_btn.setStyleSheet("font-size:12px; color:#888;")
         sort_menu = QMenu(sort_btn)
         sort_menu.addAction("By Year",         lambda: self._sort("year"))
         sort_menu.addAction("By Name (A-Z)",   lambda: self._sort("name"))
@@ -1372,14 +1383,14 @@ class PlayerListPanel(QWidget):
         btn_feat = QPushButton("+ Features Folder…")
         btn_feat.setToolTip("Select a folder containing a feature CSV to load\n"
                             "aggregate statistics for each player")
-        btn_feat.setStyleSheet("font-size:10px; color:#888; background:#252525;")
+        btn_feat.setStyleSheet("font-size:12px; color:#888; background:#252525;")
         btn_feat.clicked.connect(self.request_features_folder)
         layout.addWidget(btn_feat)
 
         btn_anom = QPushButton("+ Anomaly Folder…")
         btn_anom.setToolTip("Select a folder containing an anomaly CSV\n"
                             "to show STG-NF flagged frames on the timeline")
-        btn_anom.setStyleSheet("font-size:10px; color:#888; background:#252525;")
+        btn_anom.setStyleSheet("font-size:12px; color:#888; background:#252525;")
         btn_anom.clicked.connect(self.request_anomaly_folder)
         layout.addWidget(btn_anom)
 
@@ -1473,11 +1484,141 @@ class PlayerListPanel(QWidget):
         self._rebuild_list()
 
 
+# ── Feature Descriptions Panel ─────────────────────────────────────────────────
+
+class FeatureDescPanel(QWidget):
+    """Collapsible panel showing descriptions of all computed biomechanical features."""
+
+    _FEATURES = [
+        # (name, category, description)
+        ("body_hip_width_median_px", "Body Size",
+         "Median pixel distance between left and right hip keypoints across all frames. "
+         "Used as a body-scale normalization reference."),
+        ("body_shoulder_width_median_px", "Body Size",
+         "Median pixel distance between left and right shoulder keypoints."),
+        ("body_torso_length_median_px", "Body Size",
+         "Median pixel distance from mid-shoulder to mid-hip. Represents torso height in the frame."),
+
+        ("bend_hip_hinge_arc_mean", "Bend / Arc Mechanics",
+         "Mean hip hinge angle during the arc phase. Hip hinge is the angle at mid-hip between "
+         "the torso vector (shoulder→hip) and the thigh vector (hip→knee). "
+         "180° = fully upright; 90° = torso horizontal; lower = deeper forward bend."),
+        ("bend_hip_hinge_arc_p5", "Bend / Arc Mechanics",
+         "5th percentile of hip hinge angle during the arc phase. "
+         "Robustly captures peak forward bend while ignoring brief artifact frames. "
+         "Elite edge rushers typically achieve 60–80° during the arc."),
+        ("bend_hip_hinge_arc_p10", "Bend / Arc Mechanics",
+         "10th percentile of hip hinge angle during the arc phase. Similar to p5 but slightly "
+         "less sensitive to single-frame artifacts."),
+        ("bend_hip_hinge_arc_min", "Bend / Arc Mechanics",
+         "Minimum (most bent) hip hinge angle during the arc phase. "
+         "Can be noisy — p5 is preferred for ranking."),
+        ("bend_hip_hinge_global_p5", "Bend / Arc Mechanics",
+         "5th percentile of hip hinge angle across all detected frames (not just arc phase). "
+         "Useful when arc segmentation is uncertain."),
+        ("bend_torso_lean_arc_mean", "Bend / Arc Mechanics",
+         "Mean torso lean from vertical during the arc phase. "
+         "Measured as the angle between the torso vector and upward vertical. "
+         "0° = perfectly upright; 90° = torso horizontal."),
+        ("bend_pct_frames_bent_arc", "Bend / Arc Mechanics",
+         "Fraction of arc frames where the hip hinge angle is below 140° (considered 'bent'). "
+         "Higher values indicate sustained forward lean throughout the arc."),
+
+        ("knee_flexion_arc_mean", "Knee Flexion",
+         "Mean knee flexion angle during the arc phase, averaged across left and right knees. "
+         "180° = straight leg; lower = more bent. Deeper knee flexion improves leverage."),
+        ("knee_flexion_arc_min", "Knee Flexion",
+         "Minimum (most bent) knee flexion angle during the arc phase. "
+         "Captures the deepest squat position in the arc."),
+        ("knee_flexion_pickup_min", "Knee Flexion",
+         "Minimum knee flexion within ±5 frames of each cone pickup event. "
+         "Measures how deeply the athlete bends to pick up cones."),
+
+        ("shin_lean_arc_mean", "Shin Lean",
+         "Mean shin lean from vertical during the arc phase, averaged across both legs. "
+         "Shin lean is a proxy for ankle dorsiflexion — higher values indicate more "
+         "forward shin angle and greater ankle mobility."),
+        ("shin_lean_arc_max", "Shin Lean",
+         "Maximum shin lean from vertical during the arc phase (most extreme lean across both legs)."),
+        ("shin_lean_arc_p90", "Shin Lean",
+         "90th percentile of combined shin lean during the arc phase. "
+         "Robust measure of peak forward shin angle."),
+
+        ("balance_lateral_lean_abs_mean", "Balance",
+         "Mean absolute lateral lean during the arc phase. "
+         "Computed as (mid_shoulder_x − mid_hip_x) / torso_length. "
+         "0.0 = perfectly centered; higher = more side-to-side sway. Lower is better."),
+        ("balance_hip_y_std_arc", "Balance",
+         "Standard deviation of mid-hip vertical (y) position during the arc phase. "
+         "Measures up/down hip stability — lower values indicate a smoother arc."),
+
+        ("timing_drill_duration_sec", "Drill Timing",
+         "Total arc phase duration in seconds, from detected drill start to end."),
+        ("timing_n_pickups_detected", "Drill Timing",
+         "Number of cone pickup events detected within the drill (typically 0–2 for the hoop drill). "
+         "Detected as peaks in mid-hip vertical position while the athlete is bent forward."),
+        ("pickup_hip_y_mean", "Drill Timing",
+         "Mean vertical pixel position of mid-hip at detected pickup frames. "
+         "Higher pixel value = lower position on screen = deeper pickup."),
+        ("pickup_hip_y_max", "Drill Timing",
+         "Maximum (lowest on screen) vertical pixel position of mid-hip across all pickup frames."),
+    ]
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(280)
+        self.setMaximumWidth(400)
+
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        hdr = QLabel("Feature Descriptions")
+        hdr.setStyleSheet(
+            "background:#1e1e1e; color:#d4d4d4; font-size:12px; font-weight:bold; "
+            "padding:6px 10px; border-bottom:1px solid #444;")
+        outer.addWidget(hdr)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        outer.addWidget(scroll)
+
+        inner = QWidget()
+        vbox = QVBoxLayout(inner)
+        vbox.setContentsMargins(10, 8, 10, 12)
+        vbox.setSpacing(0)
+
+        current_cat = None
+        for name, cat, desc in self._FEATURES:
+            if cat != current_cat:
+                current_cat = cat
+                cat_lbl = QLabel(cat)
+                cat_lbl.setStyleSheet(
+                    "color:#a8c0d8; font-size:12px; font-weight:bold; "
+                    "border-bottom:1px solid #333; padding-top:10px; padding-bottom:3px;")
+                vbox.addWidget(cat_lbl)
+
+            name_lbl = QLabel(name)
+            name_lbl.setStyleSheet(
+                "color:#e0e0e0; font-size:12px; font-weight:bold; "
+                "padding-top:6px; padding-bottom:1px;")
+            vbox.addWidget(name_lbl)
+
+            desc_lbl = QLabel(desc)
+            desc_lbl.setStyleSheet("color:#a8a8a8; font-size:12px;")
+            desc_lbl.setWordWrap(True)
+            vbox.addWidget(desc_lbl)
+
+        vbox.addStretch()
+        scroll.setWidget(inner)
+
+
 # ── Main Window ────────────────────────────────────────────────────────────────
 
 class KeypointEditor(QMainWindow):
 
-    def __init__(self, video_folder: str = "", poses_folder: str = "",
+    def __init__(self, video_folder: str = "", poses_parent: str = "",
                  features_csv: str = "", anomaly_csv: str = "",
                  start_in_edit: bool = False):
         super().__init__()
@@ -1486,9 +1627,12 @@ class KeypointEditor(QMainWindow):
 
         # ── Session data ──────────────────────────────────────────────────────
         self._video_folder  = video_folder
-        self._poses_folder  = poses_folder
+        self._poses_parent  = poses_parent   # parent folder of model subfolders
         self._features_csv  = features_csv
         self._anomaly_csv   = anomaly_csv
+
+        # Currently active model name (subfolder name, e.g. "poses_yolo11x")
+        self._current_model: str = ""
 
         # player_id → PlayerInfo dict
         self._players:      dict[str, dict] = {}
@@ -1535,7 +1679,7 @@ class KeypointEditor(QMainWindow):
         self._play_timer.timeout.connect(self._advance_playback)
 
         # ── Load data ─────────────────────────────────────────────────────────
-        if video_folder and poses_folder:
+        if video_folder and poses_parent:
             self._init_session()
         else:
             self._run_setup_dialog()
@@ -1573,10 +1717,17 @@ class KeypointEditor(QMainWindow):
         self._feat_panel = FeaturePanel()
         splitter.addWidget(self._feat_panel)
 
-        splitter.setSizes([240, 1060, 272])
+        # Far right: feature descriptions panel (hidden by default)
+        self._feat_desc_panel = FeatureDescPanel()
+        self._feat_desc_panel.hide()
+        splitter.addWidget(self._feat_desc_panel)
+
+        self._splitter = splitter
+        splitter.setSizes([240, 1060, 272, 0])
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
+        splitter.setStretchFactor(3, 0)
 
         self.setCentralWidget(splitter)
 
@@ -1648,11 +1799,39 @@ class KeypointEditor(QMainWindow):
 
         tb.addSeparator()
 
-        # Fit + Setup
+        # ── Model selector ────────────────────────────────────────────────────
+        tb.addWidget(QLabel("  Model: "))
+        self._model_combo = QComboBox()
+        self._model_combo.setMinimumWidth(160)
+        self._model_combo.setToolTip(
+            "Select which pose model's keypoints to display for this player.\n"
+            "Available models are the subfolders inside the Keypoints Parent Folder.")
+        self._model_combo.setEnabled(False)
+        self._model_combo.currentTextChanged.connect(self._on_model_changed)
+        tb.addWidget(self._model_combo)
+
+        # ── Refresh keypoints ─────────────────────────────────────────────────
+        act_refresh = QAction("⟳ Refresh", self)
+        act_refresh.setToolTip(
+            "Re-scan the keypoints parent folder for new model subfolders or updated JSONs.")
+        act_refresh.triggered.connect(self._refresh_keypoints)
+        tb.addAction(act_refresh)
+
+        tb.addSeparator()
+
+        # ── Fit + feature descriptions + Setup ───────────────────────────────
         act_fit = QAction("Fit  (F)", self)
         act_fit.setToolTip("Fit the current frame in the view  (F)")
         act_fit.triggered.connect(self.view.fit)
         tb.addAction(act_fit)
+
+        act_desc = QAction("ⓘ Features", self)
+        act_desc.setCheckable(True)
+        act_desc.setChecked(False)
+        act_desc.setToolTip("Show / hide the feature descriptions panel")
+        act_desc.triggered.connect(self._on_feat_desc_toggled)
+        tb.addAction(act_desc)
+        self._act_feat_desc = act_desc
 
         act_setup = QAction("New Session…", self)
         act_setup.setToolTip("Open the setup dialog to change folders or start a new session")
@@ -1761,7 +1940,7 @@ class KeypointEditor(QMainWindow):
     def _run_setup_dialog(self):
         dlg = SetupDialog(
             self,
-            self._video_folder, self._poses_folder,
+            self._video_folder, self._poses_parent,
             self._features_csv, self._anomaly_csv,
         )
         if dlg.exec_() != QDialog.Accepted:
@@ -1769,9 +1948,10 @@ class KeypointEditor(QMainWindow):
                 QApplication.quit()
             return
         self._video_folder = dlg.video_folder
-        self._poses_folder = dlg.poses_folder
+        self._poses_parent = dlg.poses_folder
         self._features_csv = dlg.features_csv
         self._anomaly_csv  = dlg.anomaly_csv
+        self._current_model = ""
         self._init_session()
 
     def _init_session(self):
@@ -1799,42 +1979,98 @@ class KeypointEditor(QMainWindow):
             except Exception as e:
                 self._status.showMessage(f"Could not load anomaly CSV: {e}")
 
+    @staticmethod
+    def _build_video_map(video_folder: str) -> dict:
+        """Return {player_id: Path} by scanning video_folder.
+
+        Handles two naming conventions:
+          - Ravens broadcast format: "2022 NIC BARNO AMARE DL25.mp4"
+            → player_id "2022_BARNO_AMARE_DL25"
+          - Direct format: "2022_BARNO_AMARE_DL25.mp4"
+            → player_id "2022_BARNO_AMARE_DL25"
+        """
+        if not video_folder:
+            return {}
+        folder = Path(video_folder)
+        if not folder.is_dir():
+            return {}
+        _NIC_RE = re.compile(r"^(\d{4})\s+NIC\s+(.+?)\s+(DL\s*\d+)$", re.IGNORECASE)
+        vid_map: dict = {}
+        for mp4 in folder.glob("*.mp4"):
+            m = _NIC_RE.match(mp4.stem.strip())
+            if m:
+                pid = f"{m.group(1)}_{m.group(2).replace(' ', '_')}_{m.group(3).replace(' ', '')}"
+            else:
+                pid = mp4.stem.replace(" ", "_")
+            vid_map[pid] = mp4
+        return vid_map
+
+    @staticmethod
+    def _scan_model_dirs(poses_parent: str) -> dict[str, Path]:
+        """Return {model_name: folder_path} for all subfolders of poses_parent
+        that contain at least one .json file."""
+        parent = Path(poses_parent)
+        if not parent.is_dir():
+            return {}
+        models: dict[str, Path] = {}
+        for sub in sorted(parent.iterdir()):
+            if sub.is_dir() and any(sub.glob("*.json")):
+                models[sub.name] = sub
+        return models
+
     def _scan_players(self):
         self._players.clear()
-        poses_dir = Path(self._poses_folder)
-        if not poses_dir.is_dir():
+        model_dirs = self._scan_model_dirs(self._poses_parent)
+        if not model_dirs:
+            self._status.showMessage(
+                "No model subfolders found in the keypoints parent folder. "
+                "Ensure it contains subdirectories like poses_yolo11x/ with .json files.")
             return
 
-        json_files = sorted(poses_dir.glob("*.json"))
-        feat_ids   = set(self._feat_df["player_id"].astype(str)) if self._feat_df is not None else set()
-        anom_ids   = set(self._anom_df["player_id"].astype(str)) if self._anom_df is not None else set()
+        feat_ids = set(self._feat_df["player_id"].astype(str)) if self._feat_df is not None else set()
+        anom_ids = set(self._anom_df["player_id"].astype(str)) if self._anom_df is not None else set()
+        vid_map  = self._build_video_map(self._video_folder)
 
-        for jf in json_files:
-            pid = jf.stem
-            vid = Path(self._video_folder) / f"{pid}.mp4"
-            # Quick peek at JSON to get frame count
+        # Build union of all player IDs across all models
+        # pid → {model_name: json_path}
+        pid_models: dict[str, dict[str, str]] = {}
+        for model_name, folder in model_dirs.items():
+            for jf in sorted(folder.glob("*.json")):
+                pid = jf.stem
+                pid_models.setdefault(pid, {})[model_name] = str(jf)
+
+        _PREFERRED = ["poses_yolo11x", "poses_yolo26x", "poses_rtmpose_body17"]
+
+        for pid, models in pid_models.items():
+            vid = vid_map.get(pid)
+            # Pick default model: prefer common high-quality models, else first alphabetically
+            default = next((m for m in _PREFERRED if m in models), next(iter(models)))
+            # Quick frame count from default model's JSON
             n_frames = 0
             try:
-                with open(jf) as f:
+                with open(models[default]) as f:
                     raw = json.load(f)
                 n_frames = len(raw.get("athlete_frames", []))
             except Exception:
                 pass
             self._players[pid] = {
                 "player_id":    pid,
-                "has_video":    vid.is_file(),
+                "has_video":    vid is not None,
                 "has_features": pid in feat_ids,
                 "has_anomaly":  pid in anom_ids,
                 "n_frames":     n_frames,
-                "video_path":   str(vid) if vid.is_file() else None,
-                "poses_path":   str(jf),
+                "video_path":   str(vid) if vid is not None else None,
+                "poses_path":   models[default],
+                "models":       models,          # {model_name: json_path}
+                "default_model": default,
             }
 
         self._ordered_pids = list(self._players.keys())
-        n = len(self._ordered_pids)
+        n     = len(self._ordered_pids)
         n_vid = sum(1 for p in self._players.values() if p["has_video"])
         self._status.showMessage(
             f"Loaded {n} players ({n_vid} with video)  —  "
+            f"{len(model_dirs)} model(s): {', '.join(model_dirs)}  —  "
             f"{'No features' if self._feat_df is None else f'{len(feat_ids)} with features'}  "
             f"{'No anomalies' if self._anom_df is None else 'anomaly data loaded'}")
 
@@ -1887,6 +2123,95 @@ class KeypointEditor(QMainWindow):
             state.edits.clear()
         return result
 
+    def _on_model_changed(self, model_name: str):
+        """Called when the model combo changes — reload keypoints for current player."""
+        if not model_name or not self._current_pid:
+            return
+        if model_name == self._current_model:
+            return
+        info = self._players.get(self._current_pid)
+        if info is None or model_name not in info.get("models", {}):
+            return
+        self._current_model = model_name
+        info["poses_path"] = info["models"][model_name]
+        # Reload JSON data (keep video and anomaly state)
+        try:
+            with open(info["poses_path"]) as f:
+                self._pose_data = json.load(f)
+        except Exception as e:
+            self._status.showMessage(f"Cannot load JSON for model {model_name}: {e}")
+            return
+        self._frame_map.clear()
+        self._frame_list.clear()
+        self._orig_kps.clear()
+        for entry in self._pose_data.get("athlete_frames", []):
+            vf = entry["frame"]
+            self._frame_map[vf] = entry
+            self._frame_list.append(vf)
+            self._orig_kps[vf] = deepcopy(entry["keypoints"])
+        self._frame_list.sort()
+        n = len(self._frame_list)
+        self._slider.blockSignals(True)
+        self._slider.setMaximum(max(0, n - 1))
+        self._slider.setValue(0)
+        self._slider.blockSignals(False)
+        self._list_idx = 0
+        self._show(0)
+        self.view.fit()
+        self._status.showMessage(
+            f"{self._current_pid}  |  model: {model_name}  |  {n} tracked frames")
+
+    def _refresh_keypoints(self):
+        """Re-scan keypoints parent folder and update available models."""
+        if not self._poses_parent:
+            return
+        model_dirs = self._scan_model_dirs(self._poses_parent)
+        # Update each player's models dict
+        for pid, info in self._players.items():
+            new_models: dict[str, str] = {}
+            for model_name, folder in model_dirs.items():
+                jf = folder / f"{pid}.json"
+                if jf.is_file():
+                    new_models[model_name] = str(jf)
+            info["models"] = new_models
+            if new_models and info["poses_path"] not in new_models.values():
+                info["poses_path"] = next(iter(new_models.values()))
+        # Refresh combo for current player
+        if self._current_pid:
+            info = self._players.get(self._current_pid)
+            if info:
+                self._populate_model_combo(info)
+        self._status.showMessage(
+            f"Refreshed — {len(model_dirs)} model(s): {', '.join(model_dirs)}")
+
+    def _populate_model_combo(self, info: dict):
+        """Fill the model combo with models available for the given player info."""
+        models = info.get("models", {})
+        self._model_combo.blockSignals(True)
+        self._model_combo.clear()
+        for m in sorted(models):
+            self._model_combo.addItem(m)
+        target = self._current_model if self._current_model in models else info.get("default_model", "")
+        if target:
+            idx = self._model_combo.findText(target)
+            if idx >= 0:
+                self._model_combo.setCurrentIndex(idx)
+        self._model_combo.setEnabled(len(models) > 0)
+        self._model_combo.blockSignals(False)
+        if target and target != self._current_model:
+            self._current_model = self._model_combo.currentText()
+
+    def _on_feat_desc_toggled(self, checked: bool):
+        if checked:
+            self._feat_desc_panel.show()
+            sizes = self._splitter.sizes()
+            if sizes[3] == 0:
+                sizes[3] = 320
+                sizes[1] = max(200, sizes[1] - 320)
+                self._splitter.setSizes(sizes)
+        else:
+            self._feat_desc_panel.hide()
+
     def _load_player(self, pid: str):
         info = self._players.get(pid)
         if info is None:
@@ -1905,6 +2230,13 @@ class KeypointEditor(QMainWindow):
                 self._last_read_vf = -2
             else:
                 self._cap = None
+
+        # ── Model combo ───────────────────────────────────────────────────────
+        self._populate_model_combo(info)
+        self._current_model = self._model_combo.currentText()
+        # Use current model's JSON path
+        if self._current_model and self._current_model in info.get("models", {}):
+            info["poses_path"] = info["models"][self._current_model]
 
         # ── Load JSON ─────────────────────────────────────────────────────────
         try:
@@ -2371,10 +2703,6 @@ def main():
     app.setOrganizationName("NFL-Combine")
     _dark_palette(app)
 
-    # Resolve feature/anomaly CSV paths if folders were passed on CLI
-    features_csv  = ""
-    anomaly_csv   = ""
-
     def _auto_csv(folder, required_cols):
         p = Path(folder)
         if not p.is_dir():
@@ -2389,14 +2717,21 @@ def main():
                 pass
         return ""
 
-    if args.features:
-        features_csv = _auto_csv(args.features, ["player_id"])
-    if args.anomalies:
-        anomaly_csv  = _auto_csv(args.anomalies, ["player_id", "frame", "is_low_prob"])
+    # Load saved session paths from QSettings (skip dialog on subsequent launches)
+    settings = QSettings("NFL-Combine", "KeypointEditor")
+
+    video_folder  = args.videos  or settings.value("last_video_folder",    "")
+    poses_parent  = args.poses   or settings.value("last_poses_parent",
+                                   settings.value("last_poses_folder", ""))
+    feat_folder   = args.features  or settings.value("last_features_folder",  "")
+    anom_folder   = args.anomalies or settings.value("last_anomalies_folder",  "")
+
+    features_csv  = _auto_csv(feat_folder,  ["player_id"]) if feat_folder else ""
+    anomaly_csv   = _auto_csv(anom_folder,  ["player_id", "frame", "is_low_prob"]) if anom_folder else ""
 
     window = KeypointEditor(
-        video_folder=args.videos,
-        poses_folder=args.poses,
+        video_folder=video_folder,
+        poses_parent=poses_parent,
         features_csv=features_csv,
         anomaly_csv=anomaly_csv,
         start_in_edit=args.edit,
