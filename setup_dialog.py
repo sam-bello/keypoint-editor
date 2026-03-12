@@ -1,0 +1,276 @@
+"""
+setup_dialog.py — first-run session setup dialog.
+"""
+
+import sys
+import os
+import csv as _csv
+from pathlib import Path
+
+_here = Path(__file__).parent
+if str(_here) not in sys.path:
+    sys.path.insert(0, str(_here))
+
+from PyQt5.QtCore import QSettings
+from PyQt5.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+    QDialogButtonBox, QGroupBox, QWidget, QComboBox, QFileDialog,
+)
+
+
+class SetupDialog(QDialog):
+    """
+    First-run session setup dialog.  Remembers last used paths via QSettings.
+    """
+
+    def __init__(self, parent=None,
+                 init_videos="", init_poses="", init_features="", init_anomalies=""):
+        super().__init__(parent)
+        self.setWindowTitle("Keypoint Editor — Session Setup")
+        self.setMinimumWidth(560)
+        self.setModal(True)
+
+        self._settings = QSettings("NFL-Combine", "KeypointEditor")
+
+        self.video_folder = ""
+        self.poses_folder = ""
+        self.features_csv = ""
+        self.anomaly_csv  = ""
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 16, 20, 16)
+
+        layout.addWidget(self._hdr("Session Setup", size=14, bold=True))
+        layout.addWidget(self._hdr("Select folders containing pose data.  "
+                                   "Fields marked * are required.", color="#a8c0d8", size=12))
+        layout.addSpacing(4)
+
+        # Video folder
+        self._vid_edit, vid_grp = self._folder_row(
+            "Video Folder  *",
+            "Folder containing one .mp4 file per player  "
+            "(named <player_id>.mp4, e.g. 2022_HUTCHINSON_AIDAN_DL31.mp4)",
+            init_videos or self._settings.value("last_video_folder", ""),
+        )
+        layout.addWidget(vid_grp)
+
+        # Poses parent folder
+        self._pose_edit, pose_grp = self._folder_row(
+            "Keypoints Parent Folder  *",
+            "Parent folder containing per-model subfolders of pose JSONs  "
+            "(e.g. outputs/ — subfolders like poses_yolo11x/, poses_rtmpose_body17/ "
+            "each containing one .json per player)",
+            init_poses or self._settings.value("last_poses_parent",
+                          self._settings.value("last_poses_folder", "")),
+        )
+        layout.addWidget(pose_grp)
+
+        # Features folder
+        self._feat_edit, feat_grp = self._folder_row(
+            "Features Folder  (optional)",
+            "Folder containing a feature CSV with a 'player_id' column  "
+            "(e.g. outputs/features/).  Leave empty to skip.",
+            init_features or self._settings.value("last_features_folder", ""),
+            required=False,
+        )
+        layout.addWidget(feat_grp)
+
+        self._feat_csv_row = QWidget()
+        feat_csv_h = QHBoxLayout(self._feat_csv_row)
+        feat_csv_h.setContentsMargins(0, 0, 0, 0)
+        feat_csv_h.addWidget(QLabel("Select CSV:"))
+        self._feat_csv_combo = QComboBox()
+        self._feat_csv_combo.setToolTip("Choose which feature CSV to use")
+        feat_csv_h.addWidget(self._feat_csv_combo, 1)
+        self._feat_csv_row.hide()
+        layout.addWidget(self._feat_csv_row)
+
+        self._feat_status = QLabel("")
+        self._feat_status.setStyleSheet("color:#a8c0d8; font-size:12px; font-style:italic;")
+        layout.addWidget(self._feat_status)
+
+        # Anomaly folder
+        self._anom_edit, anom_grp = self._folder_row(
+            "Anomaly Folder  (optional)",
+            "Folder containing an anomaly CSV with columns: player_id, frame, is_low_prob  "
+            "(e.g. outputs/features/).  Leave empty to skip.",
+            init_anomalies or self._settings.value("last_anomalies_folder", ""),
+            required=False,
+        )
+        layout.addWidget(anom_grp)
+
+        self._anom_csv_row = QWidget()
+        anom_csv_h = QHBoxLayout(self._anom_csv_row)
+        anom_csv_h.setContentsMargins(0, 0, 0, 0)
+        anom_csv_h.addWidget(QLabel("Select CSV:"))
+        self._anom_csv_combo = QComboBox()
+        self._anom_csv_combo.setToolTip("Choose which anomaly CSV to use")
+        anom_csv_h.addWidget(self._anom_csv_combo, 1)
+        self._anom_csv_row.hide()
+        layout.addWidget(self._anom_csv_row)
+
+        self._anom_status = QLabel("")
+        self._anom_status.setStyleSheet("color:#a8c0d8; font-size:12px; font-style:italic;")
+        layout.addWidget(self._anom_status)
+
+        # Buttons
+        layout.addSpacing(6)
+        btns = QDialogButtonBox(QDialogButtonBox.Cancel | QDialogButtonBox.Ok)
+        btns.button(QDialogButtonBox.Ok).setText("Open Session")
+        btns.button(QDialogButtonBox.Ok).setToolTip(
+            "Load the selected folders and open the player browser")
+        btns.button(QDialogButtonBox.Cancel).setToolTip("Quit the application")
+        btns.accepted.connect(self._accept)
+        btns.rejected.connect(self.reject)
+        self._ok_btn = btns.button(QDialogButtonBox.Ok)
+        layout.addWidget(btns)
+
+        self._vid_edit.textChanged.connect(self._validate)
+        self._pose_edit.textChanged.connect(self._validate)
+        self._feat_edit.textChanged.connect(self._on_feat_folder_changed)
+        self._anom_edit.textChanged.connect(self._on_anom_folder_changed)
+
+        if self._feat_edit.text():
+            self._on_feat_folder_changed(self._feat_edit.text())
+        if self._anom_edit.text():
+            self._on_anom_folder_changed(self._anom_edit.text())
+
+        self._validate()
+
+    # ── UI helpers ────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _hdr(text, size=12, bold=False, color="#ccc") -> QLabel:
+        lbl = QLabel(text)
+        style = f"color:{color}; font-size:{size}px;"
+        if bold:
+            style += " font-weight:bold;"
+        lbl.setStyleSheet(style)
+        return lbl
+
+    def _folder_row(self, title: str, hint: str, default: str = "",
+                    required: bool = True):
+        grp = QGroupBox(title)
+        grp.setStyleSheet(
+            "QGroupBox { color:#d4d4d4; font-size:12px; border:1px solid #444; "
+            "border-radius:4px; margin-top:8px; padding-top:8px; }"
+            "QGroupBox::title { subcontrol-origin:margin; left:8px; }"
+        )
+        v = QVBoxLayout(grp)
+        v.setContentsMargins(8, 6, 8, 6)
+        v.setSpacing(4)
+        h = QHBoxLayout()
+        edit = QLineEdit(default)
+        edit.setPlaceholderText("Click Browse… to select a folder")
+        edit.setToolTip(hint)
+        browse = QPushButton("Browse…")
+        browse.setFixedWidth(80)
+        browse.setToolTip(f"Open folder browser — {hint}")
+        browse.clicked.connect(lambda: self._browse(edit))
+        h.addWidget(edit)
+        h.addWidget(browse)
+        v.addLayout(h)
+        hint_lbl = QLabel(hint)
+        hint_lbl.setStyleSheet("color:#a8c0d8; font-size:12px;")
+        hint_lbl.setWordWrap(True)
+        v.addWidget(hint_lbl)
+        return edit, grp
+
+    def _browse(self, edit: QLineEdit):
+        start = edit.text() or os.path.expanduser("~")
+        d = QFileDialog.getExistingDirectory(self, "Select Folder", start)
+        if d:
+            edit.setText(d)
+
+    # ── CSV detection ─────────────────────────────────────────────────────────
+
+    def _find_csvs(self, folder: str, required_cols: list) -> list:
+        p = Path(folder)
+        if not p.is_dir():
+            return []
+        matches = []
+        for csv_path in sorted(p.glob("*.csv")):
+            try:
+                with open(csv_path, newline="") as f:
+                    header = next(_csv.reader(f), [])
+                if all(col in header for col in required_cols):
+                    matches.append(csv_path)
+            except Exception:
+                pass
+        return matches
+
+    def _on_feat_folder_changed(self, text: str):
+        matches = self._find_csvs(text, ["player_id"])
+        self._feat_csv_combo.clear()
+        if not text.strip():
+            self._feat_csv_row.hide()
+            self._feat_status.setText("")
+        elif not matches:
+            self._feat_csv_row.hide()
+            self._feat_status.setText("No CSVs with 'player_id' column found in this folder")
+            self._feat_status.setStyleSheet("color:#f88; font-size:12px; font-style:italic;")
+        elif len(matches) == 1:
+            self._feat_csv_row.hide()
+            self._feat_status.setText(f"Found: {matches[0].name}")
+            self._feat_status.setStyleSheet("color:#69f0ae; font-size:12px; font-style:italic;")
+            self._feat_csv_combo.addItem(str(matches[0]))
+        else:
+            for m in matches:
+                self._feat_csv_combo.addItem(str(m), str(m))
+            self._feat_csv_row.show()
+            self._feat_status.setText(f"Found {len(matches)} CSVs — select one:")
+            self._feat_status.setStyleSheet("color:#ffcc02; font-size:12px; font-style:italic;")
+
+    def _on_anom_folder_changed(self, text: str):
+        matches = self._find_csvs(text, ["player_id", "frame", "is_low_prob"])
+        self._anom_csv_combo.clear()
+        if not text.strip():
+            self._anom_csv_row.hide()
+            self._anom_status.setText("")
+        elif not matches:
+            self._anom_csv_row.hide()
+            self._anom_status.setText(
+                "No CSVs with 'player_id', 'frame', 'is_low_prob' columns found")
+            self._anom_status.setStyleSheet("color:#f88; font-size:12px; font-style:italic;")
+        elif len(matches) == 1:
+            self._anom_csv_row.hide()
+            self._anom_status.setText(f"Found: {matches[0].name}")
+            self._anom_status.setStyleSheet("color:#69f0ae; font-size:12px; font-style:italic;")
+            self._anom_csv_combo.addItem(str(matches[0]))
+        else:
+            for m in matches:
+                self._anom_csv_combo.addItem(str(m), str(m))
+            self._anom_csv_row.show()
+            self._anom_status.setText(f"Found {len(matches)} CSVs — select one:")
+            self._anom_status.setStyleSheet("color:#ffcc02; font-size:12px; font-style:italic;")
+
+    def _validate(self):
+        ok = (Path(self._vid_edit.text()).is_dir() and
+              Path(self._pose_edit.text()).is_dir())
+        self._ok_btn.setEnabled(ok)
+
+    def _accept(self):
+        self.video_folder = self._vid_edit.text().strip()
+        self.poses_folder = self._pose_edit.text().strip()
+        if self._feat_csv_combo.count() == 1:
+            self.features_csv = self._feat_csv_combo.itemText(0)
+        elif self._feat_csv_combo.count() > 1:
+            self.features_csv = self._feat_csv_combo.currentText()
+        else:
+            self.features_csv = ""
+        if self._anom_csv_combo.count() == 1:
+            self.anomaly_csv = self._anom_csv_combo.itemText(0)
+        elif self._anom_csv_combo.count() > 1:
+            self.anomaly_csv = self._anom_csv_combo.currentText()
+        else:
+            self.anomaly_csv = ""
+        self._settings.setValue("last_video_folder",    self.video_folder)
+        self._settings.setValue("last_poses_parent",    self.poses_folder)
+        self._settings.setValue("last_features_folder",
+                                Path(self.features_csv).parent.as_posix()
+                                if self.features_csv else "")
+        self._settings.setValue("last_anomalies_folder",
+                                Path(self.anomaly_csv).parent.as_posix()
+                                if self.anomaly_csv else "")
+        self.accept()
