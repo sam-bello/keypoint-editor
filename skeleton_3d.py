@@ -5,11 +5,13 @@ Displays COCO-17 pose keypoints in 3D for the current video frame.
 Data source: MotionAGFormer (or any lifter) JSON with keypoints_3d field.
 
 Coordinate convention expected:
-  - Y is up in world space (MotionAGFormer outputs Y-up camera space)
-  - Units: metres (typical MotionAGFormer output range ±1.5 m)
-  - Root-centering is applied per-frame in the renderer: mid-hip is
-    subtracted so the skeleton always sits at the GL origin regardless
-    of any upstream offset in the saved coordinates.
+  - Y is DOWN in camera space (MotionAGFormer / image convention:
+    Y increases downward). The renderer negates Y so the skeleton
+    appears upright in the GL viewport (Y-up display space).
+  - Units: metres (typical range ±0.5 m around the hip root)
+  - Root-centering is applied per-frame: mid-hip is subtracted first,
+    then Y is negated. This keeps the skeleton centred at the GL
+    origin regardless of any upstream coordinate offset.
 
 Usage:
     panel = Skeleton3DPanel()
@@ -213,7 +215,7 @@ class Skeleton3DPanel(QWidget):
         Parameters
         ----------
         frames_3d : dict mapping video_frame_index (int) → np.ndarray (17, 3)
-                    Coordinates in metres, Y-up camera space (MotionAGFormer convention).
+                    Coordinates in metres, Y-down camera space (MotionAGFormer convention).
                     Pass None or empty dict to show the no-data placeholder.
         """
         self._frames_3d    = frames_3d or {}
@@ -260,14 +262,15 @@ class Skeleton3DPanel(QWidget):
         Push new keypoint positions to GL items without re-allocating.
 
         Coordinate handling:
-          - MotionAGFormer outputs Y-up world space (no flip needed).
-          - Root-centering: subtract per-frame mid-hip so the skeleton is
-            always centred at the GL origin, regardless of upstream offset.
+          1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip) — fixes upstream
+             root-offset so skeleton always sits at the GL origin.
+          2. Negate Y — converts camera Y-down to GL Y-up so the skeleton
+             appears upright (head positive-Y, feet negative-Y).
         """
         pts = kps.astype(np.float32).copy()
-        # Centre on mid-hip (COCO indices 11 = L-hip, 12 = R-hip)
         root = (pts[11] + pts[12]) / 2.0
         pts -= root
+        pts[:, 1] = -pts[:, 1]   # Y-down → Y-up
 
         # Update joint positions
         self._joint_item.setData(pos=pts, color=_JOINT_COLORS, size=8.0, pxMode=True)
