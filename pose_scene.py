@@ -379,9 +379,13 @@ class PoseScene(QGraphicsScene):
         self._bg:      QGraphicsPixmapItem | None = None
         self._kps:     list[DraggableKeypoint]     = []
         self._lines:   list[SkeletonLine]           = []
+        self._kp_labels: list[QGraphicsSimpleTextItem] = []
         self._overlays: dict[str, AngleOverlay]     = {}
         self._undo:    list[tuple]                  = []
         self._drag_origins: dict[int, QPointF]      = {}
+        self._show_kp_indices: bool                 = False
+        self._kp_label_font = QFont("Monospace", 7)
+        self._kp_label_font.setBold(True)
 
     # ── Background ────────────────────────────────────────────────────────────
 
@@ -408,6 +412,14 @@ class PoseScene(QGraphicsScene):
             item.setFlag(QGraphicsItem.ItemIsMovable, editable)
             self.addItem(item)
             self._kps.append(item)
+            lbl = QGraphicsSimpleTextItem(str(idx))
+            lbl.setFont(self._kp_label_font)
+            lbl.setBrush(QBrush(QColor(255, 255, 255)))
+            lbl.setPos(x + KP_RADIUS + 2, y - KP_RADIUS - 2)
+            lbl.setZValue(20)
+            lbl.setVisible(self._show_kp_indices)
+            self.addItem(lbl)
+            self._kp_labels.append(lbl)
         for i, j in COCO_SKELETON:
             if i < n and j < n:
                 ln = SkeletonLine(self._kps[i], self._kps[j])
@@ -441,14 +453,26 @@ class PoseScene(QGraphicsScene):
                          for kp in self._kps], dtype=np.float32)
 
     def _clear_pose(self):
-        for item in self._kps + self._lines:
+        for item in self._kps + self._lines + self._kp_labels:
             self.removeItem(item)
         self._kps.clear()
         self._lines.clear()
+        self._kp_labels.clear()
 
     def set_kps_visible(self, v: bool):
         for item in self._kps + self._lines:
             item.setVisible(v)
+        if not v:
+            for lbl in self._kp_labels:
+                lbl.setVisible(False)
+        else:
+            for lbl in self._kp_labels:
+                lbl.setVisible(self._show_kp_indices)
+
+    def set_kp_indices_visible(self, v: bool):
+        self._show_kp_indices = v
+        for lbl in self._kp_labels:
+            lbl.setVisible(v)
 
     def set_editable(self, v: bool):
         for kp in self._kps:

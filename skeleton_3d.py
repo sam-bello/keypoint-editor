@@ -120,6 +120,7 @@ class Skeleton3DPanel(QWidget):
         self._frames_3d: dict[int, np.ndarray] = {}
         self._current_frame: int = -1
         self._bone_pts = np.zeros((_N_BONES * 2, 3), dtype=np.float32)
+        self._label_items: list = []
         self._setup_ui()
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -176,7 +177,7 @@ class Skeleton3DPanel(QWidget):
         # OpenGL viewport
         self._gl = gl.GLViewWidget()
         self._gl.setBackgroundColor((30, 30, 30, 255))
-        self._gl.setMinimumHeight(280)
+        self._gl.setMinimumHeight(480)
         self._gl.hide()
         layout.addWidget(self._gl, 1)
 
@@ -209,9 +210,24 @@ class Skeleton3DPanel(QWidget):
         )
         self._gl.addItem(self._bone_item)
 
+        # Per-joint index labels
+        self._label_items: list = []
+        for i in range(17):
+            t = gl.GLTextItem(
+                pos=np.array([0.0, 0.0, 0.0]),
+                text=str(i),
+                color=(220, 220, 220, 255),
+            )
+            self._gl.addItem(t)
+            self._label_items.append(t)
+
         self._apply_preset("Frontal")
 
     # ── Data API ──────────────────────────────────────────────────────────────
+
+    def set_labels_visible(self, v: bool):
+        for lbl in self._label_items:
+            lbl.setVisible(v)
 
     def load_player(self, frames_3d: dict):
         """
@@ -291,6 +307,10 @@ class Skeleton3DPanel(QWidget):
                                 width=2.0,
                                 antialias=True,
                                 mode='lines')
+
+        # Update index labels — offset slightly so they don't overlap the dot
+        for i, lbl in enumerate(self._label_items):
+            lbl.setData(pos=pts[i] + np.array([0.01, 0.01, 0.0], dtype=np.float32))
 
     # ── Camera preset handling ────────────────────────────────────────────────
 

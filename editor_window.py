@@ -193,7 +193,7 @@ class KeypointEditor(QMainWindow):
         self._skeleton_3d = Skeleton3DPanel()
         self._dock_3d = QDockWidget("3D Skeleton", self)
         self._dock_3d.setWidget(self._skeleton_3d)
-        self._dock_3d.setMinimumWidth(340)
+        self._dock_3d.setMinimumWidth(440)
         self._dock_3d.setFeatures(
             QDockWidget.DockWidgetMovable |
             QDockWidget.DockWidgetFloatable |
@@ -237,6 +237,14 @@ class KeypointEditor(QMainWindow):
             "The video frame is always visible.")
         self._act_kps.triggered.connect(self._on_kps_toggled)
         tb.addAction(self._act_kps)
+
+        self._act_kp_idx = QAction("Indices", self)
+        self._act_kp_idx.setCheckable(True)
+        self._act_kp_idx.setChecked(False)
+        self._act_kp_idx.setShortcut(QKeySequence("I"))
+        self._act_kp_idx.setToolTip("Show / hide keypoint index numbers on 2D and 3D views (I)")
+        self._act_kp_idx.triggered.connect(self._on_kp_idx_toggled)
+        tb.addAction(self._act_kp_idx)
 
         tb.addSeparator()
 
@@ -911,6 +919,10 @@ class KeypointEditor(QMainWindow):
         self._kps_visible = checked
         self.scene.set_kps_visible(checked)
         self._act_kps.setText(f"Keypoints  {'✓' if checked else '✗'}")
+
+    def _on_kp_idx_toggled(self, checked: bool):
+        self.scene.set_kp_indices_visible(checked)
+        self._skeleton_3d.set_labels_visible(checked)
 
     def _on_overlay_toggled(self, key: str, checked: bool):
         self.scene.set_overlay_visible(key, checked)
