@@ -4,14 +4,23 @@ skeleton_3d.py — interactive 3D skeleton viewer backed by pyqtgraph/OpenGL.
 Displays COCO-17 pose keypoints in 3D for the current video frame.
 Data source: MotionAGFormer (or any lifter) JSON with keypoints_3d field.
 
-Coordinate convention expected:
+Coordinate convention (input data):
   - Y is DOWN in camera space (MotionAGFormer / image convention:
-    Y increases downward). The renderer negates Y so the skeleton
-    appears upright in the GL viewport (Y-up display space).
+    Y increases downward).
   - Units: metres (typical range ±0.5 m around the hip root)
-  - Root-centering is applied per-frame: mid-hip is subtracted first,
-    then Y is negated. This keeps the skeleton centred at the GL
-    origin regardless of any upstream coordinate offset.
+
+Rendering pipeline (applied in _render per frame):
+  1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip).
+  2. Negate Y  →  Y-up world space (head +Y, feet −Y).
+  3. If Sagittal view: swap X↔Z so depth becomes horizontal.
+  4. Swap Y↔Z  →  pyqtgraph Z-up display space (pyqtgraph's GLGridItem
+     lies in the XY plane with Z as the vertical axis).
+
+Camera presets use elevation=0, azimuth=−90 for the front/side views.
+pyqtgraph viewMatrix = R_{−Z}(azimuth+90) · Rx(elevation−90), so
+  elevation=0, azimuth=−90  →  camera looks along +pg_Y (world depth),
+  screen_right = pg_X (world X), screen_up = pg_Z (world Y after swap).
+This matches the 2D image: X right, Y up, Z into screen.
 
 Usage:
     panel = Skeleton3DPanel()
@@ -103,19 +112,24 @@ class Skeleton3DPanel(QWidget):
 
     # Camera preset: (distance_m, elevation_deg, azimuth_deg)
     #
-    # pyqtgraph applies: R_total = Rz(azimuth) * Rx(elevation - 90)
-    #   elevation=90  → Rx(0) = identity → camera looks along world -Z
-    #                   Screen X = world X, screen Y = world Y  ← matches 2D image
-    #   elevation=0   → Rx(-90°) → camera looks along world +Y (downward = bird's eye)
+    # pyqtgraph viewMatrix = R_{-Z}(azimuth+90) · Rx(elevation-90)
+    #   After the Y↔Z swap in _render, world-Y becomes pg_Z (up) and
+    #   world-Z becomes pg_Y (depth).
     #
-    # Sagittal cannot point along world X with setCameraPosition alone, so the
-    # renderer swaps X↔Z in the data before drawing when this view is active,
-    # then uses the same elevation=90 camera.
+    #   elevation=0, azimuth=-90:
+    #     cam looks along +pg_Y (= world depth Z), screen_right=pg_X (=world X),
+    #     screen_up=pg_Z (=world Y).  This matches the 2D image exactly.
+    #
+    #   elevation=90, azimuth=0:
+    #     cam looks straight down along -pg_Z  → top / bird's-eye view.
+    #
+    # Sagittal swaps X↔Z in the data (before the Y↔Z swap) so the depth axis
+    # is shown on the horizontal screen axis.
     _PRESETS = {
-        "Frontal":   (2.0, 90.0,  0.0),   # world X→screen X, world Y→screen Y (= 2D image)
-        "Sagittal":  (2.0, 90.0,  0.0),   # same camera; X↔Z swapped in data
-        "Isometric": (2.5, 25.0, 45.0),   # general 3D perspective
-        "Top":       (2.0,  0.0,  0.0),   # looking down, world X→screen X, world Z→screen Y
+        "Frontal":   (2.0,  0.0, -90.0),  # X→right, Y→up  (matches 2D image)
+        "Sagittal":  (2.0,  0.0, -90.0),  # same camera; X↔Z swapped in data
+        "Isometric": (2.5, 30.0,  45.0),  # general 3D perspective
+        "Top":       (2.0, 90.0,   0.0),  # bird's-eye: X→right, Z→screen-Y
         "Free":      None,
     }
 
@@ -295,21 +309,19 @@ class Skeleton3DPanel(QWidget):
         """
         Push new keypoint positions to GL items without re-allocating.
 
-        Coordinate handling:
-          1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip) — fixes upstream
-             root-offset so skeleton always sits at the GL origin.
-          2. Negate Y — converts camera Y-down to GL Y-up so the skeleton
-             appears upright (head positive-Y, feet negative-Y).
-          3. Sagittal view only: swap X↔Z so the depth axis (Z) is shown
-             on the horizontal screen axis (pyqtgraph can't orbit to look
-             along world X, so we bring Z to where X would be viewed).
+        Coordinate pipeline (see module docstring for full derivation):
+          1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip).
+          2. Negate Y  → Y-up world space (head +Y, feet -Y).
+          3. Sagittal only: swap X↔Z so depth axis reads as horizontal.
+          4. Swap Y↔Z  → pyqtgraph Z-up display space.
         """
         pts = kps.astype(np.float32).copy()
         root = (pts[11] + pts[12]) / 2.0
         pts -= root
-        pts[:, 1] = -pts[:, 1]   # Y-down → Y-up
+        pts[:, 1] = -pts[:, 1]                                          # Y-down → Y-up
         if self._current_view == "Sagittal":
             pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()  # X↔Z
+        pts[:, 1], pts[:, 2] = pts[:, 2].copy(), pts[:, 1].copy()      # Y↔Z → pg Z-up
 
         # Update joint positions
         self._joint_item.setData(pos=pts, color=_JOINT_COLORS, size=8.0, pxMode=True)
