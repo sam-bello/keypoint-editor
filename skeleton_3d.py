@@ -103,12 +103,17 @@ class Skeleton3DPanel(QWidget):
 
     # Camera preset: (distance_m, elevation_deg, azimuth_deg)
     _PRESETS = {
-        "Isometric": (3.5, 25.0, 45.0),
-        "Sagittal":  (3.0,  5.0, 90.0),
-        "Frontal":   (3.0,  5.0,  0.0),
-        "Top":       (3.0, 90.0,  0.0),
+        "Frontal":   (2.0,  5.0,  0.0),
+        "Sagittal":  (2.0,  5.0, 90.0),
+        "Isometric": (2.5, 25.0, 45.0),
+        "Top":       (2.0, 90.0,  0.0),
         "Free":      None,
     }
+
+    # Trunk + limb joints used for camera auto-scaling.
+    # Head joints (0–4: nose, eyes, ears) are excluded because 3D lifting
+    # often produces large depth errors for face keypoints from side-on cameras.
+    _SCALE_JOINTS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -142,7 +147,7 @@ class Skeleton3DPanel(QWidget):
 
         self._preset_combo = QComboBox()
         self._preset_combo.addItems(list(self._PRESETS.keys()))
-        self._preset_combo.setCurrentText("Isometric")
+        self._preset_combo.setCurrentText("Frontal")
         self._preset_combo.setFixedWidth(90)
         self._preset_combo.setStyleSheet("font-size:12px;")
         self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
@@ -204,7 +209,7 @@ class Skeleton3DPanel(QWidget):
         )
         self._gl.addItem(self._bone_item)
 
-        self._apply_preset("Isometric")
+        self._apply_preset("Frontal")
 
     # ── Data API ──────────────────────────────────────────────────────────────
 
@@ -227,11 +232,13 @@ class Skeleton3DPanel(QWidget):
         if self._frames_3d:
             self._no_data.hide()
             self._gl.show()
-            # Auto-scale camera distance using root-centred extent
-            sample = next(iter(self._frames_3d.values())).astype(np.float32)
-            root   = (sample[11] + sample[12]) / 2.0
-            extent = float(np.max(np.abs(sample - root))) * 2.0
-            dist   = float(np.clip(extent * 3.0, 1.5, 6.0))
+            # Auto-scale camera using trunk/limb joints only (head joints
+            # excluded — face keypoints have unreliable depth from lifting)
+            sample  = next(iter(self._frames_3d.values())).astype(np.float32)
+            root    = (sample[11] + sample[12]) / 2.0
+            trunk   = sample[self._SCALE_JOINTS] - root
+            extent  = float(np.max(np.abs(trunk))) * 2.0
+            dist    = float(np.clip(extent * 2.0, 1.0, 4.0))
             preset = self._PRESETS.get(self._preset_combo.currentText())
             if preset:
                 self._gl.setCameraPosition(distance=dist,
