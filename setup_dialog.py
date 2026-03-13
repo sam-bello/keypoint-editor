@@ -24,7 +24,8 @@ class SetupDialog(QDialog):
     """
 
     def __init__(self, parent=None,
-                 init_videos="", init_poses="", init_features="", init_anomalies=""):
+                 init_videos="", init_poses="", init_poses_3d="",
+                 init_features="", init_anomalies=""):
         super().__init__(parent)
         self.setWindowTitle("Keypoint Editor — Session Setup")
         self.setMinimumWidth(560)
@@ -32,10 +33,11 @@ class SetupDialog(QDialog):
 
         self._settings = QSettings("NFL-Combine", "KeypointEditor")
 
-        self.video_folder = ""
-        self.poses_folder = ""
-        self.features_csv = ""
-        self.anomaly_csv  = ""
+        self.video_folder   = ""
+        self.poses_folder   = ""
+        self.poses_3d_folder = ""
+        self.features_csv   = ""
+        self.anomaly_csv    = ""
 
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
@@ -65,6 +67,16 @@ class SetupDialog(QDialog):
                           self._settings.value("last_poses_folder", "")),
         )
         layout.addWidget(pose_grp)
+
+        # 3D Poses folder
+        self._pose3d_edit, pose3d_grp = self._folder_row(
+            "3D Poses Folder  (optional)",
+            "Folder containing 3D pose JSONs from a lifting model  "
+            "(e.g. outputs/poses_3d_motionagformer/).  Leave empty to skip.",
+            init_poses_3d or self._settings.value("last_poses_3d_dir", ""),
+            required=False,
+        )
+        layout.addWidget(pose3d_grp)
 
         # Features folder
         self._feat_edit, feat_grp = self._folder_row(
@@ -251,8 +263,9 @@ class SetupDialog(QDialog):
         self._ok_btn.setEnabled(ok)
 
     def _accept(self):
-        self.video_folder = self._vid_edit.text().strip()
-        self.poses_folder = self._pose_edit.text().strip()
+        self.video_folder    = self._vid_edit.text().strip()
+        self.poses_folder    = self._pose_edit.text().strip()
+        self.poses_3d_folder = self._pose3d_edit.text().strip()
         if self._feat_csv_combo.count() == 1:
             self.features_csv = self._feat_csv_combo.itemText(0)
         elif self._feat_csv_combo.count() > 1:
@@ -267,6 +280,7 @@ class SetupDialog(QDialog):
             self.anomaly_csv = ""
         self._settings.setValue("last_video_folder",    self.video_folder)
         self._settings.setValue("last_poses_parent",    self.poses_folder)
+        self._settings.setValue("last_poses_3d_dir",    self.poses_3d_folder)
         self._settings.setValue("last_features_folder",
                                 Path(self.features_csv).parent.as_posix()
                                 if self.features_csv else "")

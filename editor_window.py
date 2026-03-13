@@ -422,17 +422,18 @@ class KeypointEditor(QMainWindow):
     def _run_setup_dialog(self):
         dlg = SetupDialog(
             self,
-            self._video_folder, self._poses_parent,
+            self._video_folder, self._poses_parent, self._poses_3d_dir,
             self._features_csv, self._anomaly_csv,
         )
         if dlg.exec_() != QDialog.Accepted:
             if not self._video_folder:
                 QApplication.quit()
             return
-        self._video_folder = dlg.video_folder
-        self._poses_parent = dlg.poses_folder
-        self._features_csv = dlg.features_csv
-        self._anomaly_csv  = dlg.anomaly_csv
+        self._video_folder  = dlg.video_folder
+        self._poses_parent  = dlg.poses_folder
+        self._poses_3d_dir  = dlg.poses_3d_folder
+        self._features_csv  = dlg.features_csv
+        self._anomaly_csv   = dlg.anomaly_csv
         self._current_model = ""
         self._init_session()
 
@@ -1140,8 +1141,6 @@ def main():
     parser.add_argument("--poses",     default="", help="Folder containing player pose .json files")
     parser.add_argument("--features",  default="", help="Folder containing feature CSV(s)")
     parser.add_argument("--anomalies", default="", help="Folder containing anomaly CSV(s)")
-    parser.add_argument("--poses-3d",  default="",
-                        help="Folder containing 3D pose JSONs (e.g. outputs/poses_3d_motionagformer/)")
     parser.add_argument("--edit",      action="store_true",
                         help="Start in Editor mode instead of View mode (default)")
     args = parser.parse_args()
@@ -1173,14 +1172,10 @@ def main():
                                        settings.value("last_poses_folder", ""))
     feat_folder   = args.features   or settings.value("last_features_folder",  "")
     anom_folder   = args.anomalies  or settings.value("last_anomalies_folder",  "")
-    poses_3d_dir  = getattr(args, "poses_3d", "") or settings.value("last_poses_3d_dir", "")
+    poses_3d_dir  = settings.value("last_poses_3d_dir", "")
 
     features_csv  = _auto_csv(feat_folder, ["player_id"]) if feat_folder else ""
     anomaly_csv   = _auto_csv(anom_folder, ["player_id", "frame", "is_low_prob"]) if anom_folder else ""
-
-    # Persist 3D dir for next session
-    if poses_3d_dir:
-        settings.setValue("last_poses_3d_dir", poses_3d_dir)
 
     window = KeypointEditor(
         video_folder=video_folder,

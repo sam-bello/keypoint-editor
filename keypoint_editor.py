@@ -7,9 +7,8 @@ Starts in VIEW mode by default.  Switch to EDITOR mode via the toolbar
 to enable drag-and-drop keypoint correction.
 
 Launch:
-  python keypoint_editor.py                        # setup dialog
+  python keypoint_editor.py                        # setup dialog (all folders configured here)
   python keypoint_editor.py --videos /v --poses /p [--features /f] [--anomalies /a]
-  python keypoint_editor.py --poses-3d outputs/poses_3d_motionagformer/
 
 Controls:
   Left / Right     previous / next frame
