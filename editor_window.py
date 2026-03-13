@@ -212,6 +212,7 @@ class KeypointEditor(QMainWindow):
         tb = QToolBar("Main Toolbar")
         tb.setMovable(False)
         tb.setIconSize(QSize(16, 16))
+        tb.setStyleSheet("QToolButton { font-size: 12px; }")
         self.addToolBar(tb)
 
         # Mode toggle
@@ -249,7 +250,9 @@ class KeypointEditor(QMainWindow):
         tb.addSeparator()
 
         # Angle overlays
-        tb.addWidget(QLabel("  Overlays: "))
+        _lbl_overlays = QLabel("  Overlays: ")
+        _lbl_overlays.setStyleSheet("font-size: 12px; color: #888; font-style: italic;")
+        tb.addWidget(_lbl_overlays)
 
         overlay_defs = [
             ("hip_hinge",  "Hip Hinge",   "Cyan arc at mid-hip showing torso–thigh bend angle"),
@@ -280,7 +283,9 @@ class KeypointEditor(QMainWindow):
         tb.addSeparator()
 
         # Model selector
-        tb.addWidget(QLabel("  Model: "))
+        _lbl_model = QLabel("  Model: ")
+        _lbl_model.setStyleSheet("font-size: 12px; color: #888; font-style: italic;")
+        tb.addWidget(_lbl_model)
         self._model_combo = QComboBox()
         self._model_combo.setMinimumWidth(160)
         self._model_combo.setToolTip(
