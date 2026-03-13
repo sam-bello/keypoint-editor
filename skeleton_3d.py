@@ -102,11 +102,20 @@ class Skeleton3DPanel(QWidget):
     """
 
     # Camera preset: (distance_m, elevation_deg, azimuth_deg)
+    #
+    # pyqtgraph applies: R_total = Rz(azimuth) * Rx(elevation - 90)
+    #   elevation=90  → Rx(0) = identity → camera looks along world -Z
+    #                   Screen X = world X, screen Y = world Y  ← matches 2D image
+    #   elevation=0   → Rx(-90°) → camera looks along world +Y (downward = bird's eye)
+    #
+    # Sagittal cannot point along world X with setCameraPosition alone, so the
+    # renderer swaps X↔Z in the data before drawing when this view is active,
+    # then uses the same elevation=90 camera.
     _PRESETS = {
-        "Frontal":   (2.0,  5.0,  0.0),
-        "Sagittal":  (2.0,  5.0, 90.0),
-        "Isometric": (2.5, 25.0, 45.0),
-        "Top":       (2.0, 90.0,  0.0),
+        "Frontal":   (2.0, 90.0,  0.0),   # world X→screen X, world Y→screen Y (= 2D image)
+        "Sagittal":  (2.0, 90.0,  0.0),   # same camera; X↔Z swapped in data
+        "Isometric": (2.5, 25.0, 45.0),   # general 3D perspective
+        "Top":       (2.0,  0.0,  0.0),   # looking down, world X→screen X, world Z→screen Y
         "Free":      None,
     }
 
@@ -121,6 +130,7 @@ class Skeleton3DPanel(QWidget):
         self._current_frame: int = -1
         self._bone_pts = np.zeros((_N_BONES * 2, 3), dtype=np.float32)
         self._label_items: list = []
+        self._current_view: str = "Frontal"
         self._setup_ui()
 
     # ── UI construction ───────────────────────────────────────────────────────
@@ -221,6 +231,7 @@ class Skeleton3DPanel(QWidget):
             self._gl.addItem(t)
             self._label_items.append(t)
 
+        self._current_view = "Frontal"
         self._apply_preset("Frontal")
 
     # ── Data API ──────────────────────────────────────────────────────────────
@@ -289,11 +300,16 @@ class Skeleton3DPanel(QWidget):
              root-offset so skeleton always sits at the GL origin.
           2. Negate Y — converts camera Y-down to GL Y-up so the skeleton
              appears upright (head positive-Y, feet negative-Y).
+          3. Sagittal view only: swap X↔Z so the depth axis (Z) is shown
+             on the horizontal screen axis (pyqtgraph can't orbit to look
+             along world X, so we bring Z to where X would be viewed).
         """
         pts = kps.astype(np.float32).copy()
         root = (pts[11] + pts[12]) / 2.0
         pts -= root
         pts[:, 1] = -pts[:, 1]   # Y-down → Y-up
+        if self._current_view == "Sagittal":
+            pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()  # X↔Z
 
         # Update joint positions
         self._joint_item.setData(pos=pts, color=_JOINT_COLORS, size=8.0, pxMode=True)
@@ -315,8 +331,14 @@ class Skeleton3DPanel(QWidget):
     # ── Camera preset handling ────────────────────────────────────────────────
 
     def _on_preset_changed(self, name: str):
+        self._current_view = name
         if name != "Free":
             self._apply_preset(name)
+        # Force re-render to apply any axis-swap change
+        if self._current_frame >= 0:
+            kps = self._frames_3d.get(self._current_frame)
+            if kps is not None:
+                self._render(kps)
 
     def _apply_preset(self, name: str):
         preset = self._PRESETS.get(name)
