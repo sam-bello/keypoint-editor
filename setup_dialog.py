@@ -72,7 +72,9 @@ class SetupDialog(QDialog):
         self._pose3d_edit, pose3d_grp = self._folder_row(
             "3D Poses Folder  (optional)",
             "Folder containing 3D pose JSONs from a lifting model  "
-            "(e.g. outputs/poses_3d_motionagformer/).  Leave empty to skip.",
+            "(e.g. outputs/poses_3d_motionagformer/ or outputs/poses_3d_4dhumans/).  "
+            "Use convert_4dhumans.py to convert 4D-Humans pkl outputs first.  "
+            "Leave empty to skip.",
             init_poses_3d or self._settings.value("last_poses_3d_dir", ""),
             required=False,
         )

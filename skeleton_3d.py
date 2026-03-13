@@ -192,8 +192,9 @@ class Skeleton3DPanel(QWidget):
         # No-data placeholder (shown when player has no 3D poses)
         self._no_data = QLabel(
             "No 3D keypoints for this player.\n"
-            "Select a 3D model (e.g. poses_3d_motionagformer) or configure\n"
-            "a 3D Poses Folder via File \u2192 New Session.")
+            "Select a 3D model (e.g. poses_3d_motionagformer, poses_3d_4dhumans)\n"
+            "or configure a 3D Poses Folder via File \u2192 New Session.\n"
+            "4D-Humans: run src/pose_extraction/convert_4dhumans.py first.")
         self._no_data.setAlignment(Qt.AlignCenter)
         self._no_data.setStyleSheet("color:#555; font-size:12px; padding:20px;")
         layout.addWidget(self._no_data)
