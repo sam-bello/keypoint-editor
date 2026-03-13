@@ -5,10 +5,11 @@ Displays COCO-17 pose keypoints in 3D for the current video frame.
 Data source: MotionAGFormer (or any lifter) JSON with keypoints_3d field.
 
 Coordinate convention expected:
-  - Root-relative (mid-hip at origin)
-  - Y is up in world space (MotionAGFormer outputs camera-space Y-down;
-    this module flips Y automatically so the skeleton appears upright)
+  - Y is up in world space (MotionAGFormer outputs Y-up camera space)
   - Units: metres (typical MotionAGFormer output range ±1.5 m)
+  - Root-centering is applied per-frame in the renderer: mid-hip is
+    subtracted so the skeleton always sits at the GL origin regardless
+    of any upstream offset in the saved coordinates.
 
 Usage:
     panel = Skeleton3DPanel()
@@ -212,7 +213,7 @@ class Skeleton3DPanel(QWidget):
         Parameters
         ----------
         frames_3d : dict mapping video_frame_index (int) → np.ndarray (17, 3)
-                    Coordinates are root-relative metres, Y-down camera space.
+                    Coordinates in metres, Y-up camera space (MotionAGFormer convention).
                     Pass None or empty dict to show the no-data placeholder.
         """
         self._frames_3d    = frames_3d or {}
@@ -224,9 +225,10 @@ class Skeleton3DPanel(QWidget):
         if self._frames_3d:
             self._no_data.hide()
             self._gl.show()
-            # Auto-scale camera distance to the data's spatial extent
-            sample = next(iter(self._frames_3d.values()))
-            extent = float(np.max(np.abs(sample))) * 2.0
+            # Auto-scale camera distance using root-centred extent
+            sample = next(iter(self._frames_3d.values())).astype(np.float32)
+            root   = (sample[11] + sample[12]) / 2.0
+            extent = float(np.max(np.abs(sample - root))) * 2.0
             dist   = float(np.clip(extent * 3.0, 1.5, 6.0))
             preset = self._PRESETS.get(self._preset_combo.currentText())
             if preset:
@@ -257,11 +259,15 @@ class Skeleton3DPanel(QWidget):
         """
         Push new keypoint positions to GL items without re-allocating.
 
-        Y is negated to flip from camera-space Y-down to display Y-up,
-        so the skeleton appears right-side-up in the default view.
+        Coordinate handling:
+          - MotionAGFormer outputs Y-up world space (no flip needed).
+          - Root-centering: subtract per-frame mid-hip so the skeleton is
+            always centred at the GL origin, regardless of upstream offset.
         """
         pts = kps.astype(np.float32).copy()
-        pts[:, 1] = -pts[:, 1]   # Y-down → Y-up
+        # Centre on mid-hip (COCO indices 11 = L-hip, 12 = R-hip)
+        root = (pts[11] + pts[12]) / 2.0
+        pts -= root
 
         # Update joint positions
         self._joint_item.setData(pos=pts, color=_JOINT_COLORS, size=8.0, pxMode=True)
