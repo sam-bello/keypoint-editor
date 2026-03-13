@@ -614,6 +614,8 @@ class KeypointEditor(QMainWindow):
         self._slider.setValue(0)
         self._slider.blockSignals(False)
         self._list_idx = 0
+        self._frames_3d = self._load_3d_poses(self._current_pid)
+        self._skeleton_3d.load_player(self._frames_3d)
         self._show(0)
         self.view.fit()
         self._status.showMessage(
@@ -676,26 +678,42 @@ class KeypointEditor(QMainWindow):
 
     def _load_3d_poses(self, pid: str) -> dict[int, np.ndarray]:
         """
-        Load 3D keypoints for a player from the poses-3d directory.
-        Returns dict mapping video frame index → (17, 3) float32 array.
-        Returns empty dict if directory or file is missing.
+        Load 3D keypoints for a player.
+
+        Priority:
+          1. Explicit 3D poses folder (configured via File → New Session).
+          2. keypoints_3d fields in the already-loaded 2D pose JSON — so
+             selecting a 3D model (e.g. poses_3d_motionagformer) as the active
+             model automatically populates the 3D panel with no extra setup.
+
+        Returns dict mapping video frame index → (17, 3) float32 array,
+        or empty dict if no 3D data is available.
         """
-        if not self._poses_3d_dir:
-            return {}
-        p = Path(self._poses_3d_dir) / f"{pid}.json"
-        if not p.is_file():
-            return {}
-        try:
-            with open(p) as f:
-                data = json.load(f)
-        except Exception:
-            return {}
-        frames_3d: dict[int, np.ndarray] = {}
-        for entry in data.get("athlete_frames", []):
-            kps3d = entry.get("keypoints_3d")
-            if kps3d is not None:
-                frames_3d[entry["frame"]] = np.array(kps3d, dtype=np.float32)
-        return frames_3d
+        def _extract(data: dict) -> dict[int, np.ndarray]:
+            out: dict[int, np.ndarray] = {}
+            for entry in data.get("athlete_frames", []):
+                kps3d = entry.get("keypoints_3d")
+                if kps3d is not None:
+                    out[entry["frame"]] = np.array(kps3d, dtype=np.float32)
+            return out
+
+        # 1 — explicit 3D directory
+        if self._poses_3d_dir:
+            p = Path(self._poses_3d_dir) / f"{pid}.json"
+            if p.is_file():
+                try:
+                    with open(p) as f:
+                        return _extract(json.load(f))
+                except Exception:
+                    pass
+
+        # 2 — fall back to keypoints_3d in the current pose JSON
+        if self._pose_data:
+            result = _extract(self._pose_data)
+            if result:
+                return result
+
+        return {}
 
     def _load_player(self, pid: str):
         info = self._players.get(pid)
