@@ -28,6 +28,7 @@ Usage:
     panel.update_frame(frame_idx)     # called on every seek / playback tick
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -37,9 +38,10 @@ if str(_here) not in sys.path:
 
 import numpy as np
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtGui import QPainter, QPen, QColor, QFont, QBrush
 from PyQt5.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QComboBox,
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
 )
 
 try:
@@ -88,6 +90,92 @@ def _build_bone_colors() -> np.ndarray:
 _JOINT_COLORS = _joint_colors()
 _BONE_COLORS  = _build_bone_colors()
 _N_BONES      = len(COCO_SKELETON)
+
+
+# ── AxisGizmo ──────────────────────────────────────────────────────────────────
+
+class AxisGizmo(QWidget):
+    """Small widget showing projected XYZ axis directions via QPainter."""
+    SIZE = 70
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(self.SIZE, self.SIZE)
+        self._az = -90.0
+        self._el = 0.0
+        self.setAttribute(Qt.WA_TranslucentBackground)
+
+    def update_camera(self, az: float, el: float):
+        if az != self._az or el != self._el:
+            self._az, self._el = az, el
+            self.update()
+
+    def _axis_screen_dirs(self):
+        """(3,2) float32 — 2D screen direction of each world axis (X,Y,Z)."""
+        az = math.radians(self._az + 90)
+        el = math.radians(self._el - 90)
+        # pyqtgraph viewMatrix = Rx(el-90) · R_{-Z}(az+90)
+        # R_{-Z}(az+90) ≡ Rz(-az)  where az = az_deg+90
+        Rz = np.array([[ math.cos(az),  math.sin(az), 0],
+                       [-math.sin(az),  math.cos(az), 0],
+                       [ 0,             0,            1]], dtype=np.float64)
+        Rx = np.array([[1, 0,              0           ],
+                       [0, math.cos(el), -math.sin(el)],
+                       [0, math.sin(el),  math.cos(el)]], dtype=np.float64)
+        R = Rx @ Rz
+        cam = (R @ np.eye(3).T).T           # (3,3): row i = camera-space unit axis i
+        return np.column_stack([cam[:, 0], -cam[:, 1]]).astype(np.float32)  # flip Y for widget
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        cx = cy = self.SIZE // 2
+        r = cx - 10
+
+        # Background circle
+        painter.setBrush(QBrush(QColor(18, 18, 18, 210)))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(cx - r - 6, cy - r - 6, (r + 6) * 2, (r + 6) * 2)
+
+        dirs = self._axis_screen_dirs()   # (3,2)
+        labels  = ['X', 'Y', 'Z']
+        colors  = [QColor(220, 80, 80), QColor(80, 210, 80), QColor(80, 130, 220)]
+
+        # Compute camera-depth of each axis tip to draw back→front
+        az = math.radians(self._az + 90)
+        el = math.radians(self._el - 90)
+        Rz = np.array([[ math.cos(az), math.sin(az), 0],
+                       [-math.sin(az), math.cos(az), 0], [0, 0, 1]])
+        Rx = np.array([[1, 0, 0], [0, math.cos(el), -math.sin(el)],
+                       [0, math.sin(el),  math.cos(el)]])
+        R  = Rx @ Rz
+        depths = [(R @ np.eye(3)[i])[2] for i in range(3)]
+        order  = np.argsort(depths)   # back→front
+
+        font = QFont()
+        font.setPointSize(8)
+        font.setBold(True)
+        painter.setFont(font)
+
+        for i in order:
+            dx, dy = float(dirs[i, 0]), float(dirs[i, 1])
+            ex = int(cx + dx * r)
+            ey = int(cy + dy * r)
+            alpha = int(255 * max(0.3, (depths[i] + 1.0) / 2.0))
+            col = QColor(colors[i])
+            col.setAlpha(alpha)
+
+            painter.setPen(QPen(col, 2))
+            painter.drawLine(cx, cy, ex, ey)
+
+            # Dot at tip
+            painter.setBrush(QBrush(col))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(ex - 3, ey - 3, 6, 6)
+
+            # Label
+            painter.setPen(QPen(col, 1))
+            painter.drawText(ex + int(dx * 7) - 4, ey + int(dy * 7) + 4, labels[i])
 
 
 # ── Skeleton3DPanel ────────────────────────────────────────────────────────────
@@ -145,7 +233,22 @@ class Skeleton3DPanel(QWidget):
         self._bone_pts = np.zeros((_N_BONES * 2, 3), dtype=np.float32)
         self._label_items: list = []
         self._current_view: str = "Frontal"
+
+        # Animation state
+        self._auto_dist: float = 2.0
+        self._anim_timer = QTimer(self)
+        self._anim_timer.timeout.connect(self._anim_step)
+        self._anim_start  = (2.0,  0.0, -90.0)   # (dist, el, az) at start
+        self._anim_target = (2.0,  0.0, -90.0)   # (dist, el, az) at end
+        self._anim_t: float = 0.0
+        self._anim_pending_view: str | None = None
+
         self._setup_ui()
+
+        # Camera polling timer (Feature A + C)
+        self._cam_timer = QTimer(self)
+        self._cam_timer.timeout.connect(self._poll_camera)
+        self._cam_timer.start(80)
 
     # ── UI construction ───────────────────────────────────────────────────────
 
@@ -154,7 +257,7 @@ class Skeleton3DPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
 
-        # Header bar
+        # Header bar (28 px)
         header = QWidget()
         header.setFixedHeight(28)
         header.setStyleSheet("background:#1e1e1e; border-bottom:1px solid #444;")
@@ -166,19 +269,43 @@ class Skeleton3DPanel(QWidget):
         h.addWidget(lbl)
         h.addStretch()
 
-        view_lbl = QLabel("View:")
-        view_lbl.setStyleSheet("color:#888; font-size:12px;")
-        h.addWidget(view_lbl)
-
-        self._preset_combo = QComboBox()
-        self._preset_combo.addItems(list(self._PRESETS.keys()))
-        self._preset_combo.setCurrentText("Frontal")
-        self._preset_combo.setFixedWidth(90)
-        self._preset_combo.setStyleSheet("font-size:12px;")
-        self._preset_combo.currentTextChanged.connect(self._on_preset_changed)
-        h.addWidget(self._preset_combo)
+        # Feature A — Az/El text readout
+        self._angle_label = QLabel("Az  +0°  El  +0°")
+        self._angle_label.setStyleSheet(
+            "color:#888; font-size:11px; font-family:monospace;"
+        )
+        self._angle_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        h.addWidget(self._angle_label)
 
         layout.addWidget(header)
+
+        # Feature B — Preset button bar (74 px)
+        btn_bar = QWidget()
+        btn_bar.setFixedHeight(74)
+        btn_bar.setStyleSheet("background:#252526; border-bottom:1px solid #333;")
+        bb = QHBoxLayout(btn_bar)
+        bb.setContentsMargins(8, 0, 8, 0)
+        bb.setSpacing(4)
+
+        self._preset_buttons: dict[str, QPushButton] = {}
+        for name in self._PRESETS:
+            btn = QPushButton(name)
+            btn.setFixedHeight(28)
+            btn.setCheckable(False)
+            btn.clicked.connect(lambda checked, n=name: self._on_preset_btn(n))
+            self._preset_buttons[name] = btn
+            bb.addWidget(btn)
+
+        bb.addStretch()
+
+        # Feature C — Axis gizmo (right end of button bar)
+        self._gizmo = AxisGizmo()
+        bb.addWidget(self._gizmo)
+
+        layout.addWidget(btn_bar)
+
+        # Style the initial active button
+        self._set_active_button("Frontal")
 
         if not _GL_OK:
             err = QLabel(
@@ -217,6 +344,12 @@ class Skeleton3DPanel(QWidget):
         axes.setSize(0.25, 0.25, 0.25)
         self._gl.addItem(axes)
 
+        # Feature D — Axis labels in GL scene
+        for text, pos in [("X", (0.30, 0, 0)), ("Y", (0, 0.30, 0)), ("Z", (0, 0, 0.30))]:
+            t = gl.GLTextItem(pos=np.array(pos, dtype=np.float32), text=text,
+                              color=(200, 200, 200, 180))
+            self._gl.addItem(t)
+
         self._joint_item = gl.GLScatterPlotItem(
             pos=np.zeros((17, 3), dtype=np.float32),
             color=_JOINT_COLORS,
@@ -248,6 +381,23 @@ class Skeleton3DPanel(QWidget):
 
         self._current_view = "Frontal"
         self._apply_preset("Frontal")
+
+    # ── Button styling ─────────────────────────────────────────────────────────
+
+    _STYLE_ACTIVE = (
+        "background:#0e639c; color:#fff; border:none; border-radius:2px; "
+        "padding:0 8px; font-size:11px;"
+    )
+    _STYLE_INACTIVE = (
+        "background:#3c3c3c; color:#ccc; border:none; border-radius:2px; "
+        "padding:0 8px; font-size:11px;"
+    )
+
+    def _set_active_button(self, name: str):
+        for btn_name, btn in self._preset_buttons.items():
+            btn.setStyleSheet(
+                self._STYLE_ACTIVE if btn_name == name else self._STYLE_INACTIVE
+            )
 
     # ── Data API ──────────────────────────────────────────────────────────────
 
@@ -281,9 +431,10 @@ class Skeleton3DPanel(QWidget):
             trunk   = sample[self._SCALE_JOINTS] - root
             extent  = float(np.max(np.abs(trunk))) * 2.0
             dist    = float(np.clip(extent * 2.0, 1.0, 4.0))
-            preset = self._PRESETS.get(self._preset_combo.currentText())
+            self._auto_dist = dist
+            preset = self._PRESETS.get(self._current_view)
             if preset:
-                self._gl.setCameraPosition(distance=dist,
+                self._gl.setCameraPosition(distance=self._auto_dist,
                                            elevation=preset[1],
                                            azimuth=preset[2])
         else:
@@ -343,18 +494,85 @@ class Skeleton3DPanel(QWidget):
 
     # ── Camera preset handling ────────────────────────────────────────────────
 
-    def _on_preset_changed(self, name: str):
+    def _on_preset_btn(self, name: str):
+        self._anim_timer.stop()
+        self._set_active_button(name)
+        if name == "Free":
+            self._current_view = "Free"
+            return
+        self._animate_to_preset(name)
+
+    def _animate_to_preset(self, name: str):
+        """Smoothly interpolate camera from current position to preset."""
+        target = self._PRESETS.get(name)
+        if target is None or not _GL_OK or not hasattr(self, '_gl'):
+            return
+        cur_dist = float(self._gl.opts.get('distance', self._auto_dist))
+        cur_el   = float(self._gl.opts.get('elevation', 0.0))
+        cur_az   = float(self._gl.opts.get('azimuth', -90.0))
+        _, tgt_el, tgt_az = target
+        tgt_dist = self._auto_dist   # use player-scaled distance, not hardcoded preset
+
+        # Shortest angular path for azimuth
+        daz = ((tgt_az - cur_az + 180.0) % 360.0) - 180.0
+
+        self._anim_start  = (cur_dist, cur_el, cur_az)
+        self._anim_target = (tgt_dist, tgt_el, cur_az + daz)
+        self._anim_t = 0.0
+        self._anim_pending_view = name
+
+        # Apply data-space transform (e.g. Sagittal X↔Z swap) immediately
         self._current_view = name
-        if name != "Free":
-            self._apply_preset(name)
-        # Force re-render to apply any axis-swap change
         if self._current_frame >= 0:
             kps = self._frames_3d.get(self._current_frame)
             if kps is not None:
                 self._render(kps)
 
+        self._anim_timer.stop()
+        self._anim_timer.start(16)   # ~60 fps
+
+    def _anim_step(self):
+        """Advance one animation tick (called every 16 ms)."""
+        self._anim_t = min(1.0, self._anim_t + 16.0 / 400.0)
+        # Ease-in-out (cosine)
+        t = 0.5 * (1.0 - math.cos(math.pi * self._anim_t))
+
+        s_dist, s_el, s_az = self._anim_start
+        g_dist, g_el, g_az = self._anim_target
+        dist = s_dist + (g_dist - s_dist) * t
+        el   = s_el   + (g_el   - s_el)   * t
+        az   = s_az   + (g_az   - s_az)   * t
+
+        self._gl.setCameraPosition(distance=dist, elevation=el, azimuth=az)
+
+        if self._anim_t >= 1.0:
+            self._anim_timer.stop()
+
+    def _poll_camera(self):
+        if not _GL_OK or not hasattr(self, '_gl'):
+            return
+        az = float(self._gl.opts.get('azimuth', -90.0))
+        el = float(self._gl.opts.get('elevation', 0.0))
+
+        # Feature A: update readout (az relative to Frontal preset az = -90)
+        az_rel = ((az - (-90.0) + 180.0) % 360.0) - 180.0
+        self._angle_label.setText(f"Az {az_rel:+.0f}°  El {el:+.0f}°")
+
+        # Feature C: update gizmo
+        self._gizmo.update_camera(az, el)
+
+        # Auto-detect manual drag → switch to Free
+        if self._current_view != "Free" and not self._anim_timer.isActive():
+            preset = self._PRESETS.get(self._current_view)
+            if preset:
+                _, p_el, p_az = preset
+                if abs(az - p_az) > 2.5 or abs(el - p_el) > 2.5:
+                    self._current_view = "Free"
+                    self._set_active_button("Free")
+
     def _apply_preset(self, name: str):
         preset = self._PRESETS.get(name)
-        if preset and hasattr(self, "_gl"):
-            dist, el, az = preset
+        if preset and hasattr(self, '_gl'):
+            _, el, az = preset
+            dist = getattr(self, '_auto_dist', preset[0])
             self._gl.setCameraPosition(distance=dist, elevation=el, azimuth=az)
