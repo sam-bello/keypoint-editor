@@ -5,14 +5,15 @@ Displays COCO-17 pose keypoints in 3D for the current video frame.
 Data source: MotionAGFormer (or any lifter) JSON with keypoints_3d field.
 
 Coordinate convention (input data):
-  - Y is UP (lift_poses_3d.py flips Y before storing, so keypoints_3d has
-    Y-up: head +Y, feet −Y).
+  - Y is DOWN in camera space (image convention: Y increases downward,
+    head at small Y, feet at large Y). Stored keypoints_3d are Y-down.
   - Units: metres (typical range ±0.5 m around the hip root)
 
 Rendering pipeline (applied in _render per frame):
   1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip).
-  2. If Sagittal view: swap X↔Z so depth becomes horizontal.
-  3. Swap Y↔Z  →  pyqtgraph Z-up display space (pyqtgraph's GLGridItem
+  2. Negate Y  →  Y-up world space (head +Y, feet −Y).
+  3. If Sagittal view: swap X↔Z so depth becomes horizontal.
+  4. Swap Y↔Z  →  pyqtgraph Z-up display space (pyqtgraph's GLGridItem
      lies in the XY plane with Z as the vertical axis).
 
 Camera presets use elevation=0, azimuth=−90 for the front/side views.
@@ -411,8 +412,8 @@ class Skeleton3DPanel(QWidget):
         Parameters
         ----------
         frames_3d : dict mapping video_frame_index (int) → np.ndarray (17, 3)
-                    Coordinates in metres, Y-up (head +Y, feet −Y). lift_poses_3d.py
-                    flips Y before storing, so no negation is applied here.
+                    Coordinates in metres, Y-down camera space (head at small Y,
+                    feet at large Y). _render negates Y for display.
                     Pass None or empty dict to show the no-data placeholder.
         """
         self._frames_3d    = frames_3d or {}
@@ -463,13 +464,14 @@ class Skeleton3DPanel(QWidget):
 
         Coordinate pipeline (see module docstring for full derivation):
           1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip).
-          2. Sagittal only: swap X↔Z so depth axis reads as horizontal.
-          3. Swap Y↔Z  → pyqtgraph Z-up display space.
-        Input is already Y-up (lift_poses_3d.py flips Y before storing).
+          2. Negate Y  → Y-up world space (head +Y, feet -Y).
+          3. Sagittal only: swap X↔Z so depth axis reads as horizontal.
+          4. Swap Y↔Z  → pyqtgraph Z-up display space.
         """
         pts = kps.astype(np.float32).copy()
         root = (pts[11] + pts[12]) / 2.0
         pts -= root
+        pts[:, 1] = -pts[:, 1]                                          # Y-down → Y-up
         if self._current_view == "Sagittal":
             pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()  # X↔Z
         pts[:, 1], pts[:, 2] = pts[:, 2].copy(), pts[:, 1].copy()      # Y↔Z → pg Z-up
