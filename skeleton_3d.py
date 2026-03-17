@@ -236,6 +236,11 @@ class Skeleton3DPanel(QWidget):
 
         # Animation state
         self._auto_dist: float = 2.0
+        # X-axis scale correction: lift_poses_3d.py normalises x by W/2 and y by H/2
+        # independently, but MotionAGFormer expects both normalised by the same value
+        # (W/2 for landscape video).  This makes y 1.78× too large for 1280×720 video,
+        # compressing the skeleton horizontally.  Multiply X by W/H to restore proportions.
+        self._x_scale_corr: float = 1280.0 / 720.0   # = W / H for Ravens 1280×720 source
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._anim_step)
         self._anim_start  = (2.0,  0.0, -90.0)   # (dist, el, az) at start
@@ -471,6 +476,7 @@ class Skeleton3DPanel(QWidget):
         pts = kps.astype(np.float32).copy()
         root = (pts[11] + pts[12]) / 2.0
         pts -= root
+        pts[:, 0] *= self._x_scale_corr                                 # restore W/H aspect ratio
         pts[:, 1] = -pts[:, 1]                                          # Y-down → Y-up
         if self._current_view == "Sagittal":
             pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()  # X↔Z
