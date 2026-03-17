@@ -198,7 +198,7 @@ class Skeleton3DPanel(QWidget):
     Free       — user rotates with mouse drag (no preset applied)
     """
 
-    # Camera preset: (distance_m, elevation_deg, azimuth_deg)
+    # Camera preset: (distance_m, elevation_deg, azimuth_deg, fov_deg)
     #
     # pyqtgraph viewMatrix = R_{-Z}(azimuth+90) · Rx(elevation-90)
     #   After the Y↔Z swap in _render, world-Y becomes pg_Z (up) and
@@ -213,11 +213,17 @@ class Skeleton3DPanel(QWidget):
     #
     # Sagittal swaps X↔Z in the data (before the Y↔Z swap) so the depth axis
     # is shown on the horizontal screen axis.
+    #
+    # Frontal/Sagittal use large distance + narrow FOV (telephoto ≈ orthographic).
+    # This makes the frontal projection match the 2D image positions: at d→∞
+    # with proportionally small FOV, perspective distortion → 0, and the
+    # XZ plane projection becomes identical to the original camera's flat image.
+    # fov=None → use _compute_ortho_fov(dist) which preserves apparent skeleton size.
     _PRESETS = {
-        "Frontal":   (2.0,  0.0, -90.0),  # X→right, Y→up  (matches 2D image)
-        "Sagittal":  (2.0,  0.0, -90.0),  # same camera; X↔Z swapped in data
-        "Isometric": (2.5, 30.0,  45.0),  # general 3D perspective
-        "Top":       (2.0, 90.0,   0.0),  # bird's-eye: X→right, Z→screen-Y
+        "Frontal":   (30.0,  0.0, -90.0, None),  # orthographic-like: matches 2D image
+        "Sagittal":  (30.0,  0.0, -90.0, None),  # same camera; X↔Z swapped in data
+        "Isometric": ( 2.5, 30.0,  45.0, 60.0),  # normal perspective
+        "Top":       ( 2.5, 90.0,   0.0, 60.0),  # bird's-eye
         "Free":      None,
     }
 
@@ -243,8 +249,8 @@ class Skeleton3DPanel(QWidget):
         self._x_scale_corr: float = 1280.0 / 720.0   # = W / H for Ravens 1280×720 source
         self._anim_timer = QTimer(self)
         self._anim_timer.timeout.connect(self._anim_step)
-        self._anim_start  = (2.0,  0.0, -90.0)   # (dist, el, az) at start
-        self._anim_target = (2.0,  0.0, -90.0)   # (dist, el, az) at end
+        self._anim_start  = (2.0,  0.0, -90.0, 60.0)  # (dist, el, az, fov)
+        self._anim_target = (2.0,  0.0, -90.0, 60.0)  # (dist, el, az, fov)
         self._anim_t: float = 0.0
         self._anim_pending_view: str | None = None
 
@@ -440,9 +446,12 @@ class Skeleton3DPanel(QWidget):
             self._auto_dist = dist
             preset = self._PRESETS.get(self._current_view)
             if preset:
+                dist_raw, p_el, p_az, fov_raw = preset
+                fov = self._compute_ortho_fov(dist_raw) if fov_raw is None else fov_raw
+                self._gl.opts['fov'] = fov
                 self._gl.setCameraPosition(distance=self._auto_dist,
-                                           elevation=preset[1],
-                                           azimuth=preset[2])
+                                           elevation=p_el,
+                                           azimuth=p_az)
         else:
             self._gl.hide()
             self._no_data.show()
@@ -509,6 +518,12 @@ class Skeleton3DPanel(QWidget):
             return
         self._animate_to_preset(name)
 
+    def _compute_ortho_fov(self, dist: float) -> float:
+        """FOV that makes a skeleton at `dist` appear the same size as at auto_dist with 60°."""
+        ref_half_tan = math.tan(math.radians(30.0))  # tan(60°/2)
+        half_tan = ref_half_tan * self._auto_dist / dist
+        return math.degrees(2.0 * math.atan(half_tan))
+
     def _animate_to_preset(self, name: str):
         """Smoothly interpolate camera from current position to preset."""
         target = self._PRESETS.get(name)
@@ -517,14 +532,16 @@ class Skeleton3DPanel(QWidget):
         cur_dist = float(self._gl.opts.get('distance', self._auto_dist))
         cur_el   = float(self._gl.opts.get('elevation', 0.0))
         cur_az   = float(self._gl.opts.get('azimuth', -90.0))
-        _, tgt_el, tgt_az = target
+        cur_fov  = float(self._gl.opts.get('fov', 60.0))
+        tgt_dist_raw, tgt_el, tgt_az, tgt_fov_raw = target
         tgt_dist = self._auto_dist   # use player-scaled distance, not hardcoded preset
+        tgt_fov  = self._compute_ortho_fov(tgt_dist_raw) if tgt_fov_raw is None else tgt_fov_raw
 
         # Shortest angular path for azimuth
         daz = ((tgt_az - cur_az + 180.0) % 360.0) - 180.0
 
-        self._anim_start  = (cur_dist, cur_el, cur_az)
-        self._anim_target = (tgt_dist, tgt_el, cur_az + daz)
+        self._anim_start  = (cur_dist, cur_el, cur_az, cur_fov)
+        self._anim_target = (tgt_dist, tgt_el, cur_az + daz, tgt_fov)
         self._anim_t = 0.0
         self._anim_pending_view = name
 
@@ -544,12 +561,14 @@ class Skeleton3DPanel(QWidget):
         # Ease-in-out (cosine)
         t = 0.5 * (1.0 - math.cos(math.pi * self._anim_t))
 
-        s_dist, s_el, s_az = self._anim_start
-        g_dist, g_el, g_az = self._anim_target
+        s_dist, s_el, s_az, s_fov = self._anim_start
+        g_dist, g_el, g_az, g_fov = self._anim_target
         dist = s_dist + (g_dist - s_dist) * t
         el   = s_el   + (g_el   - s_el)   * t
         az   = s_az   + (g_az   - s_az)   * t
+        fov  = s_fov  + (g_fov  - s_fov)  * t
 
+        self._gl.opts['fov'] = fov
         self._gl.setCameraPosition(distance=dist, elevation=el, azimuth=az)
 
         if self._anim_t >= 1.0:
@@ -572,7 +591,7 @@ class Skeleton3DPanel(QWidget):
         if self._current_view != "Free" and not self._anim_timer.isActive():
             preset = self._PRESETS.get(self._current_view)
             if preset:
-                _, p_el, p_az = preset
+                _, p_el, p_az, _ = preset
                 if abs(az - p_az) > 2.5 or abs(el - p_el) > 2.5:
                     self._current_view = "Free"
                     self._set_active_button("Free")
@@ -580,6 +599,8 @@ class Skeleton3DPanel(QWidget):
     def _apply_preset(self, name: str):
         preset = self._PRESETS.get(name)
         if preset and hasattr(self, '_gl'):
-            _, el, az = preset
-            dist = getattr(self, '_auto_dist', preset[0])
+            dist_raw, el, az, fov_raw = preset
+            dist = getattr(self, '_auto_dist', dist_raw)
+            fov  = self._compute_ortho_fov(dist_raw) if fov_raw is None else fov_raw
+            self._gl.opts['fov'] = fov
             self._gl.setCameraPosition(distance=dist, elevation=el, azimuth=az)
