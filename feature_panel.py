@@ -50,6 +50,17 @@ class FeaturePanel(QWidget):
         "lateral_lean":            "Lateral shoulder–hip offset, normalised by torso length. 0 = balanced.",
     }
 
+    _TIMING_ROWS = [
+        # (label, time_key, vel_key | None, tooltip)
+        ("Reaction",       "reaction_time_sec",    None,          "Ball snap → athlete first moves"),
+        ("A1 start→T1",   "arc1_time_sec",         "arc1_vel_ms", "Start → 1st towel contact  (~4.8 m semicircle)"),
+        ("A2 T1 contact",  "arc2_time_sec",         None,          "1st towel contact → release duration"),
+        ("A3 T1→T2",      "arc3_time_sec",         "arc3_vel_ms", "1st towel release → 2nd towel contact  (~4.8 m semicircle)"),
+        ("A4 T2 contact",  "arc4_time_sec",         None,          "2nd towel contact → release duration"),
+        ("A5 T2→finish",  "arc5_time_sec",         "arc5_vel_ms", "2nd towel release → finish line  (~6.6 m)"),
+        ("Total",          "total_drill_time_sec",  None,          "Ball lift → finish line crossing"),
+    ]
+
     _AGG_ROWS = [
         ("Hip Hinge p5",      "bend_hip_hinge_arc_p5"),
         ("Hip Hinge min",     "bend_hip_hinge_arc_min"),
@@ -121,6 +132,31 @@ class FeaturePanel(QWidget):
             self._agg_labels[key] = lbl_v
         vbox.addLayout(self._agg_form)
 
+        vbox.addSpacing(10)
+        self._timing_hdr = QLabel("Drill Timing")
+        self._timing_hdr.setStyleSheet("color:#aaa; font-size:12px; font-weight:bold; "
+                                       "border-bottom:1px solid #444; padding-bottom:2px;")
+        vbox.addWidget(self._timing_hdr)
+
+        self._timing_na = QLabel("No events file loaded")
+        self._timing_na.setStyleSheet("color:#666; font-size:12px; font-style:italic;")
+        vbox.addWidget(self._timing_na)
+
+        self._timing_labels: dict[str, QLabel] = {}
+        self._timing_form = QFormLayout()
+        self._timing_form.setSpacing(5)
+        self._timing_form.setLabelAlignment(Qt.AlignRight)
+        for label, tkey, vkey, tip in self._TIMING_ROWS:
+            lbl_k = QLabel(label + ":")
+            lbl_k.setStyleSheet("color:#999; font-size:12px;")
+            lbl_k.setToolTip(tip)
+            lbl_v = QLabel("—")
+            lbl_v.setStyleSheet("color:#ccc; font-size:12px;")
+            lbl_v.setToolTip(tip)
+            self._timing_form.addRow(lbl_k, lbl_v)
+            self._timing_labels[tkey] = lbl_v
+        vbox.addLayout(self._timing_form)
+
         vbox.addStretch()
         scroll.setWidget(inner)
 
@@ -129,6 +165,7 @@ class FeaturePanel(QWidget):
         outer.addWidget(scroll)
 
         self._clear_agg()
+        self._clear_timing()
 
     def update_live(self, angles: dict | None):
         """Refresh the live-angle section from a compute_frame_angles() result."""
@@ -171,6 +208,28 @@ class FeaturePanel(QWidget):
 
     def _clear_agg(self):
         for lbl in self._agg_labels.values():
+            lbl.setText("—")
+
+    def load_player_events(self, events: dict | None):
+        """Populate the Drill Timing section from an events sidecar dict."""
+        if not events:
+            self._clear_timing()
+            self._timing_na.show()
+            return
+        self._timing_na.hide()
+        for label, tkey, vkey, _ in self._TIMING_ROWS:
+            t = events.get(tkey)
+            v = events.get(vkey) if vkey else None
+            lbl = self._timing_labels[tkey]
+            if t is None:
+                lbl.setText("—")
+            elif v is not None:
+                lbl.setText(f"{t:.2f} s    {v:.1f} m/s")
+            else:
+                lbl.setText(f"{t:.2f} s")
+
+    def _clear_timing(self):
+        for lbl in self._timing_labels.values():
             lbl.setText("—")
 
 

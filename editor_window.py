@@ -9,6 +9,7 @@ Functions:
     main            — parse CLI args and launch the application
 """
 
+import bisect
 import sys
 import os
 import re
@@ -46,13 +47,27 @@ from constants import _parse_player_id, _fmt_angle
 from models import PlayerState
 from pose_scene import PoseScene
 from video_view import VideoView
-from anomaly_bar import AnomalyMarkBar
+from anomaly_bar import AnomalyMarkBar, EVENT_TICK_COLORS
 from player_panel import PlayerListPanel
 from feature_panel import FeaturePanel, FeatureDescPanel
 from setup_dialog import SetupDialog
 from skeleton_3d import Skeleton3DPanel
 
 import cv2
+
+# ── Event label metadata ───────────────────────────────────────────────────────
+# Maps event_key (matching event_detection.py output fields) to
+# (short_label, hex_color) shown in the frame controls when the current frame
+# is that event.
+_EVENT_LABELS: dict[str, tuple[str, str]] = {
+    "athlete_move":   ("Move",       "#FF9500"),   # amber
+    "ball_lift":      ("Ball lift",  "#FFD700"),
+    "towel1_contact": ("T1 pickup",  "#78FF50"),
+    "towel1_release": ("T1 drop",    "#00C853"),
+    "towel2_contact": ("T2 pickup",  "#50C8FF"),
+    "towel2_release": ("T2 drop",    "#0090FF"),
+    "finish_cross":   ("Finish",     "#DC50FF"),
+}
 
 
 # ── Dark palette ───────────────────────────────────────────────────────────────
@@ -84,7 +99,7 @@ class KeypointEditor(QMainWindow):
 
     def __init__(self, video_folder: str = "", poses_parent: str = "",
                  features_csv: str = "", anomaly_csv: str = "",
-                 poses_3d_dir: str = "",
+                 poses_3d_dir: str = "", events_dir: str = "",
                  start_in_edit: bool = False):
         super().__init__()
         self.setWindowTitle("Keypoint Editor")
@@ -95,7 +110,8 @@ class KeypointEditor(QMainWindow):
         self._poses_parent  = poses_parent
         self._features_csv  = features_csv
         self._anomaly_csv   = anomaly_csv
-        self._poses_3d_dir  = poses_3d_dir   # NEW: optional 3D pose directory
+        self._poses_3d_dir  = poses_3d_dir
+        self._events_dir    = events_dir     # optional drill-event sidecar JSONs
 
         self._current_model: str = ""
         self._players:       dict[str, dict] = {}
@@ -113,6 +129,7 @@ class KeypointEditor(QMainWindow):
         self._list_idx:     int = 0
         self._last_read_vf: int = -2
         self._anomaly_frames: set[int] = set()
+        self._current_events: dict = {}          # loaded from <events_dir>/<pid>_events.json
 
         self._frames_3d:    dict[int, np.ndarray] = {}   # NEW
 
@@ -391,6 +408,13 @@ class KeypointEditor(QMainWindow):
         self._lbl_anomaly.setToolTip("This frame is flagged as anomalous by STG-NF scoring")
         h.addWidget(self._lbl_anomaly)
 
+        self._lbl_event = QLabel("")
+        self._lbl_event.setFixedWidth(88)
+        self._lbl_event.setToolTip(
+            "This frame is a key drill event\n"
+            "(ball lift / towel pickup or drop / finish)")
+        h.addWidget(self._lbl_event)
+
         h.addStretch()
 
         self._btn_save = QPushButton("Save  Ctrl+S")
@@ -414,6 +438,7 @@ class KeypointEditor(QMainWindow):
         v.addWidget(self._slider)
 
         self._mark_bar = AnomalyMarkBar(self._slider)
+        self._mark_bar.seek_to.connect(self._on_event_tick_clicked)
         v.addWidget(self._mark_bar)
 
         return panel
@@ -436,7 +461,7 @@ class KeypointEditor(QMainWindow):
         dlg = SetupDialog(
             self,
             self._video_folder, self._poses_parent, self._poses_3d_dir,
-            self._features_csv, self._anomaly_csv,
+            self._features_csv, self._anomaly_csv, self._events_dir,
         )
         if dlg.exec_() != QDialog.Accepted:
             if not self._video_folder:
@@ -447,6 +472,7 @@ class KeypointEditor(QMainWindow):
         self._poses_3d_dir  = dlg.poses_3d_folder
         self._features_csv  = dlg.features_csv
         self._anomaly_csv   = dlg.anomaly_csv
+        self._events_dir    = dlg.events_folder
         self._current_model = ""
         self._init_session()
 
@@ -814,6 +840,18 @@ class KeypointEditor(QMainWindow):
                             if vf in self._anomaly_frames]
             self._mark_bar.set_marks(max(0, n - 1), flagged_idxs)
 
+        # Drill event markers
+        self._current_events.clear()
+        if self._events_dir:
+            ev_path = Path(self._events_dir) / f"{pid}_events.json"
+            if ev_path.is_file():
+                try:
+                    with open(ev_path) as _ef:
+                        self._current_events = json.load(_ef)
+                except Exception:
+                    pass
+        self._update_event_marks(n)
+
         # Feature panel
         feature_row = None
         if self._feat_df is not None:
@@ -821,6 +859,7 @@ class KeypointEditor(QMainWindow):
             if not rows.empty:
                 feature_row = rows.iloc[0].to_dict()
         self._feat_panel.load_player_agg(feature_row, pid)
+        self._feat_panel.load_player_events(self._current_events)
 
         _, name, pos = _parse_player_id(pid)
         self.setWindowTitle(f"Keypoint Editor — {name}  [{pos}]")
@@ -837,6 +876,31 @@ class KeypointEditor(QMainWindow):
             + (f"  |  3D: {len(self._frames_3d)} frames" if has_3d else "  |  3D: none")
             + (f"  |  {len(self._anomaly_frames)} anomalous" if self._anomaly_frames else "")
         )
+
+    def _update_event_marks(self, maximum: int):
+        """
+        Convert event video-frame numbers to timeline list-indices and push to mark bar.
+        Uses bisect to find the nearest list index when the exact frame isn't tracked.
+        """
+        vf_to_idx = {vf: i for i, vf in enumerate(self._frame_list)}
+        event_ticks: dict[str, list[int]] = {}
+        for ev_key in _EVENT_LABELS:
+            vf = self._current_events.get(f"{ev_key}_frame")
+            if vf is None:
+                continue
+            idx = vf_to_idx.get(vf)
+            if idx is None:
+                # Nearest tracked frame (e.g. ball_lift may be pre-drill)
+                pos = bisect.bisect_left(self._frame_list, vf)
+                pos = max(0, min(pos, len(self._frame_list) - 1))
+                idx = pos
+            event_ticks[ev_key] = [idx]
+        self._mark_bar.set_events(event_ticks)
+
+    def _on_event_tick_clicked(self, list_idx: int):
+        """Called when the user clicks an event tick in the mark bar."""
+        self._stop()
+        self._show(list_idx)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Frame display
@@ -884,6 +948,19 @@ class KeypointEditor(QMainWindow):
         else:
             self._lbl_anomaly.setText("")
             self._lbl_anomaly.setStyleSheet("")
+
+        # Event label
+        ev_label, ev_color = "", ""
+        for ev_key, (label, color) in _EVENT_LABELS.items():
+            if self._current_events.get(f"{ev_key}_frame") == vf:
+                ev_label, ev_color = label, color
+                break
+        if ev_label:
+            self._lbl_event.setText(ev_label)
+            self._lbl_event.setStyleSheet(f"color:{ev_color}; font-weight:bold;")
+        else:
+            self._lbl_event.setText("")
+            self._lbl_event.setStyleSheet("")
 
     def _read_frame(self, vframe: int):
         if self._cap is None:
@@ -1176,6 +1253,8 @@ def main():
     parser.add_argument("--poses",     default="", help="Folder containing player pose .json files")
     parser.add_argument("--features",  default="", help="Folder containing feature CSV(s)")
     parser.add_argument("--anomalies", default="", help="Folder containing anomaly CSV(s)")
+    parser.add_argument("--events",    default="", help="Folder containing drill-event sidecar JSONs "
+                                                        "(outputs/events/)")
     parser.add_argument("--edit",      action="store_true",
                         help="Start in Editor mode instead of View mode (default)")
     args = parser.parse_args()
@@ -1207,6 +1286,7 @@ def main():
                                        settings.value("last_poses_folder", ""))
     feat_folder   = args.features   or settings.value("last_features_folder",  "")
     anom_folder   = args.anomalies  or settings.value("last_anomalies_folder",  "")
+    events_dir    = args.events     or settings.value("last_events_dir", "")
     poses_3d_dir  = settings.value("last_poses_3d_dir", "")
 
     features_csv  = _auto_csv(feat_folder, ["player_id"]) if feat_folder else ""
@@ -1218,6 +1298,7 @@ def main():
         features_csv=features_csv,
         anomaly_csv=anomaly_csv,
         poses_3d_dir=poses_3d_dir,
+        events_dir=events_dir,
         start_in_edit=args.edit,
     )
     window.show()
