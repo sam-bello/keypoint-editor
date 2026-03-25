@@ -507,12 +507,15 @@ class KeypointEditor(QMainWindow):
         folder = Path(video_folder)
         if not folder.is_dir():
             return {}
-        _NIC_RE = re.compile(r"^(\d{4})\s+NIC\s+(.+?)\s+(DL\s*\d+)$", re.IGNORECASE)
+        _NIC_RE = re.compile(
+            r"^(\d{4})\s+NIC\s+(.+?)\s+(DL\s*\d+)(?:\s+(.+))?$", re.IGNORECASE)
         vid_map: dict = {}
         for mp4 in folder.glob("*.mp4"):
             m = _NIC_RE.match(mp4.stem.strip())
             if m:
-                pid = f"{m.group(1)}_{m.group(2).replace(' ', '_')}_{m.group(3).replace(' ', '')}"
+                base = f"{m.group(1)}_{m.group(2).replace(' ', '_')}_{m.group(3).replace(' ', '')}"
+                drill = m.group(4).strip().replace(" ", "_").upper() if m.group(4) else ""
+                pid = f"{base}_{drill}" if drill else base
             else:
                 pid = mp4.stem.replace(" ", "_")
             vid_map[pid] = mp4
