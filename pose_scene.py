@@ -407,7 +407,7 @@ class PoseScene(QGraphicsScene):
         self._clear_pose()
         n = len(kps)
         for idx, kp in enumerate(kps):
-            x, y, conf = float(kp[0]), float(kp[1]), float(kp[2])
+            x, y, conf = float(kp[0]), float(kp[1]), (float(kp[2]) if len(kp) > 2 else 1.0)
             item = DraggableKeypoint(idx, x, y, conf)
             item.setFlag(QGraphicsItem.ItemIsMovable, editable)
             self.addItem(item)
