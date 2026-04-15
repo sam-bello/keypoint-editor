@@ -486,7 +486,6 @@ class Skeleton3DPanel(QWidget):
         root = (pts[11] + pts[12]) / 2.0
         pts -= root
         pts[:, 0] *= self._x_scale_corr                                 # restore W/H aspect ratio
-        pts[:, 1] = -pts[:, 1]                                          # Y-down → Y-up
         if self._current_view == "Sagittal":
             pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()  # X↔Z
         pts[:, 1], pts[:, 2] = pts[:, 2].copy(), pts[:, 1].copy()      # Y↔Z → pg Z-up
