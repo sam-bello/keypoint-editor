@@ -1,6 +1,7 @@
 """
-constants.py — shared COCO-17 metadata, visual constants, and helper functions.
+constants.py — shared skeleton metadata, visual constants, and helper functions.
 
+Supports COCO-17 and SMPL-45 keypoint formats.
 Imported by all other modules; has no internal dependencies.
 """
 
@@ -28,6 +29,79 @@ COCO_SKELETON = [
 LEFT_KPS  = {1, 3, 5, 7,  9, 11, 13, 15}
 RIGHT_KPS = {2, 4, 6, 8, 10, 12, 14, 16}
 
+# ── SMPL-45 skeleton metadata ──────────────────────────────────────────────────
+
+SMPL45_KP_NAMES = [
+    "Pelvis",     "L_Hip",      "R_Hip",      "Spine1",     "L_Knee",
+    "R_Knee",     "Spine2",     "L_Ankle",    "R_Ankle",    "Spine3",
+    "L_Foot",     "R_Foot",     "Neck",       "L_Collar",   "R_Collar",
+    "Head",       "L_Shoulder", "R_Shoulder", "L_Elbow",    "R_Elbow",
+    "L_Wrist",    "R_Wrist",    "L_Hand",     "R_Hand",     "Nose",
+    "R_Eye",      "L_Eye",      "R_Ear",      "L_Ear",      "L_BigToe",
+    "L_SmToe",    "L_Heel",     "R_BigToe",   "R_SmToe",    "R_Heel",
+    "L_Thumb",    "L_Index",    "L_Middle",   "L_Ring",     "L_Pinky",
+    "R_Thumb",    "R_Index",    "R_Middle",   "R_Ring",     "R_Pinky",
+]
+
+SMPL45_SKELETON = [
+    # Spine
+    (0, 3), (3, 6), (6, 9), (9, 12), (12, 15),
+    # Hips
+    (0, 1), (0, 2),
+    # Left leg
+    (1, 4), (4, 7), (7, 10),
+    # Left foot
+    (31, 7), (31, 29), (31, 30),
+    # Right leg
+    (2, 5), (5, 8), (8, 11),
+    # Right foot
+    (34, 8), (34, 32), (34, 33),
+    # Collar/shoulders
+    (9, 13), (13, 16), (9, 14), (14, 17),
+    # Left arm
+    (16, 18), (18, 20), (20, 22),
+    (20, 35),
+    (22, 36), (22, 37), (22, 38), (22, 39),
+    # Right arm
+    (17, 19), (19, 21), (21, 23),
+    (21, 40),
+    (23, 41), (23, 42), (23, 43), (23, 44),
+    # Face
+    (15, 24), (24, 26), (24, 25), (26, 28), (25, 27),
+]
+
+LEFT_KPS_45  = {1, 4, 7, 10, 13, 16, 18, 20, 22, 26, 28, 29, 30, 31, 35, 36, 37, 38, 39}
+RIGHT_KPS_45 = {2, 5, 8, 11, 14, 17, 19, 21, 23, 25, 27, 32, 33, 34, 40, 41, 42, 43, 44}
+
+
+def get_pose_config(n_keypoints: int) -> dict:
+    """Return skeleton metadata dict for the given keypoint count (17 or 45)."""
+    if n_keypoints == 45:
+        return dict(
+            n=45,
+            kp_names=SMPL45_KP_NAMES,
+            skeleton=SMPL45_SKELETON,
+            left_kps=LEFT_KPS_45,
+            right_kps=RIGHT_KPS_45,
+            hip_l=1, hip_r=2,
+            shoulder_l=16, shoulder_r=17,
+            knee_l=4, knee_r=5,
+            ankle_l=7, ankle_r=8,
+            scale_joints=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21],
+        )
+    return dict(
+        n=17,
+        kp_names=COCO_KP_NAMES,
+        skeleton=COCO_SKELETON,
+        left_kps=LEFT_KPS,
+        right_kps=RIGHT_KPS,
+        hip_l=11, hip_r=12,
+        shoulder_l=5, shoulder_r=6,
+        knee_l=13, knee_r=14,
+        ankle_l=15, ankle_r=16,
+        scale_joints=[5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+    )
+
 # ── Visual constants ───────────────────────────────────────────────────────────
 
 KP_RADIUS   = 7
@@ -45,19 +119,19 @@ _C_SHIN_R = QColor(255, 171, 145, 200)   # salmon — right shin lean
 
 # ── Helpers ────────────────────────────────────────────────────────────────────
 
-def _kp_color(idx: int, conf: float) -> QColor:
+def _kp_color(idx: int, conf: float, left_kps=LEFT_KPS, right_kps=RIGHT_KPS) -> QColor:
     alpha = int(min(1.0, max(0.3, conf)) * 255)
-    if idx in LEFT_KPS:
+    if idx in left_kps:
         return QColor(50, 220, 50, alpha)
-    if idx in RIGHT_KPS:
+    if idx in right_kps:
         return QColor(220, 60, 60, alpha)
     return QColor(220, 200, 50, alpha)
 
 
-def _line_color(i: int, j: int) -> QColor:
-    if i in LEFT_KPS and j in LEFT_KPS:
+def _line_color(i: int, j: int, left_kps=LEFT_KPS, right_kps=RIGHT_KPS) -> QColor:
+    if i in left_kps and j in left_kps:
         return QColor(50, 180, 50, 200)
-    if i in RIGHT_KPS and j in RIGHT_KPS:
+    if i in right_kps and j in right_kps:
         return QColor(180, 50, 50, 200)
     return QColor(200, 180, 50, 180)
 

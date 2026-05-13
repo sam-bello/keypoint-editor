@@ -42,8 +42,8 @@ try:
 except ImportError:
     _PANDAS = False
 
-from angles import compute_frame_angles
-from constants import _parse_player_id, _fmt_angle
+from angles import compute_frame_angles, compute_frame_angles_45
+from constants import _parse_player_id, _fmt_angle, get_pose_config
 from models import PlayerState
 from pose_scene import PoseScene
 from video_view import VideoView
@@ -118,8 +118,9 @@ class KeypointEditor(QMainWindow):
         self._ordered_pids:  list[str] = []
         self._player_states: dict[str, PlayerState] = {}
 
-        self._current_pid:  str | None = None
-        self._pose_data:    dict | None = None
+        self._current_pid:   str | None = None
+        self._pose_data:     dict | None = None
+        self._n_keypoints:   int = 17
         self._frame_map:    dict[int, dict] = {}
         self._frame_list:   list[int] = []
         self._orig_kps:     dict[int, list] = {}
@@ -656,8 +657,12 @@ class KeypointEditor(QMainWindow):
         self._slider.setValue(0)
         self._slider.blockSignals(False)
         self._list_idx = 0
+        self._n_keypoints = self._pose_data.get("n_keypoints", 17)
+        pose_cfg = get_pose_config(self._n_keypoints)
+        self.scene.set_pose_config(pose_cfg)
+        self.scene.setup_overlays()
         self._frames_3d = self._load_3d_poses(self._current_pid)
-        self._skeleton_3d.load_player(self._frames_3d)
+        self._skeleton_3d.load_player(self._frames_3d, n_keypoints=self._n_keypoints)
         self._show(0)
         self.view.fit()
         self._status.showMessage(
@@ -728,7 +733,7 @@ class KeypointEditor(QMainWindow):
              selecting a 3D model (e.g. poses_3d_motionagformer) as the active
              model automatically populates the 3D panel with no extra setup.
 
-        Returns dict mapping video frame index → (17, 3) float32 array,
+        Returns dict mapping video frame index → (N, 3) float32 array,
         or empty dict if no 3D data is available.
         """
         def _extract(data: dict) -> dict[int, np.ndarray]:
@@ -801,6 +806,12 @@ class KeypointEditor(QMainWindow):
             self._orig_kps[vf] = deepcopy(entry["keypoints"])
         self._frame_list.sort()
 
+        # Detect keypoint format and configure scene + overlays
+        self._n_keypoints = self._pose_data.get("n_keypoints", 17)
+        pose_cfg = get_pose_config(self._n_keypoints)
+        self.scene.set_pose_config(pose_cfg)
+        self.scene.setup_overlays()
+
         n = len(self._frame_list)
         self._slider.blockSignals(True)
         self._slider.setMinimum(0)
@@ -808,9 +819,9 @@ class KeypointEditor(QMainWindow):
         self._slider.setValue(0)
         self._slider.blockSignals(False)
 
-        # Load 3D poses (NEW)
+        # Load 3D poses
         self._frames_3d = self._load_3d_poses(pid)
-        self._skeleton_3d.load_player(self._frames_3d)
+        self._skeleton_3d.load_player(self._frames_3d, n_keypoints=self._n_keypoints)
 
         # Restore player state
         state = self._player_states.get(pid)
@@ -1076,7 +1087,10 @@ class KeypointEditor(QMainWindow):
     def _on_live_changed(self):
         kps = self.scene.get_kps_array()
         if kps is not None:
-            angles = compute_frame_angles(kps)
+            if self._n_keypoints == 45:
+                angles = compute_frame_angles_45(kps)
+            else:
+                angles = compute_frame_angles(kps)
             self._feat_panel.update_live(angles)
         else:
             self._feat_panel.update_live(None)

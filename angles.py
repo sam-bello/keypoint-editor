@@ -32,6 +32,14 @@ R_BIG_TOE, R_SMALL_TOE, R_HEEL = 20, 21, 22
 
 KP_CONF_THRESH = 0.3   # minimum confidence to use a keypoint
 
+# SMPL-45 index aliases
+_S45_L_SHOULDER, _S45_R_SHOULDER = 16, 17
+_S45_L_HIP,      _S45_R_HIP      =  1,  2
+_S45_L_KNEE,     _S45_R_KNEE     =  4,  5
+_S45_L_ANKLE,    _S45_R_ANKLE    =  7,  8
+_S45_L_BIG_TOE,  _S45_L_SMALL_TOE = 29, 30
+_S45_R_BIG_TOE,  _S45_R_SMALL_TOE = 32, 33
+
 
 def _pt(kps: np.ndarray, idx: int):
     """Return (x, y) array for keypoint idx, or None if below confidence."""
@@ -164,6 +172,71 @@ def compute_frame_angles(kps: np.ndarray) -> dict:
         float(np.linalg.norm(l_sh - r_sh)) if l_sh is not None and r_sh is not None else None)
 
     # Hip position
+    if mid_hip is not None:
+        out["mid_hip_y"] = float(mid_hip[1])
+        out["mid_hip_x"] = float(mid_hip[0])
+    else:
+        out["mid_hip_y"] = None
+        out["mid_hip_x"] = None
+
+    return out
+
+
+def compute_frame_angles_45(kps: np.ndarray) -> dict:
+    """Same metrics as compute_frame_angles but for SMPL-45 keypoints."""
+    l_sh  = _pt(kps, _S45_L_SHOULDER)
+    r_sh  = _pt(kps, _S45_R_SHOULDER)
+    l_hip = _pt(kps, _S45_L_HIP)
+    r_hip = _pt(kps, _S45_R_HIP)
+    l_kn  = _pt(kps, _S45_L_KNEE)
+    r_kn  = _pt(kps, _S45_R_KNEE)
+    l_an  = _pt(kps, _S45_L_ANKLE)
+    r_an  = _pt(kps, _S45_R_ANKLE)
+
+    mid_sh  = _mid(l_sh, r_sh)
+    mid_hip = _mid(l_hip, r_hip)
+    mid_kn  = _mid(l_kn, r_kn)
+
+    out = {}
+    out["hip_hinge"] = _angle_at_b(mid_sh, mid_hip, mid_kn)
+
+    if mid_sh is not None and mid_hip is not None:
+        out["torso_lean_from_vertical"] = _angle_from_vertical(mid_sh - mid_hip)
+    else:
+        out["torso_lean_from_vertical"] = None
+
+    out["left_knee_flexion"]  = _angle_at_b(l_hip, l_kn, l_an)
+    out["right_knee_flexion"] = _angle_at_b(r_hip, r_kn, r_an)
+    lkf, rkf = out["left_knee_flexion"], out["right_knee_flexion"]
+    if lkf is not None and rkf is not None:
+        out["mean_knee_flexion"] = (lkf + rkf) / 2.0
+    else:
+        out["mean_knee_flexion"] = lkf if lkf is not None else rkf
+
+    for side, kn, an, big_i, sm_i in [
+        ("left",  l_kn, l_an, _S45_L_BIG_TOE, _S45_L_SMALL_TOE),
+        ("right", r_kn, r_an, _S45_R_BIG_TOE, _S45_R_SMALL_TOE),
+    ]:
+        if kn is not None and an is not None:
+            out[f"{side}_shin_lean"] = _angle_from_vertical(an - kn)
+        else:
+            out[f"{side}_shin_lean"] = None
+        out[f"{side}_ankle_dorsiflexion"] = _angle_at_b(
+            kn, an, _mid(_pt(kps, big_i), _pt(kps, sm_i)))
+
+    if mid_sh is not None and mid_hip is not None:
+        tl = float(np.linalg.norm(mid_sh - mid_hip))
+        out["torso_length_px"] = tl
+        out["lateral_lean"] = float(mid_sh[0] - mid_hip[0]) / tl if tl > 1e-6 else None
+    else:
+        out["torso_length_px"] = None
+        out["lateral_lean"] = None
+
+    out["hip_width_px"] = (
+        float(np.linalg.norm(l_hip - r_hip)) if l_hip is not None and r_hip is not None else None)
+    out["shoulder_width_px"] = (
+        float(np.linalg.norm(l_sh - r_sh)) if l_sh is not None and r_sh is not None else None)
+
     if mid_hip is not None:
         out["mid_hip_y"] = float(mid_hip[1])
         out["mid_hip_x"] = float(mid_hip[0])
