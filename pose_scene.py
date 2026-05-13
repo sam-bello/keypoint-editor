@@ -39,6 +39,7 @@ from constants import (
     KP_RADIUS, LINE_WIDTH, ARC_RADIUS,
     _C_HIP, _C_TORSO, _C_KNEE_L, _C_KNEE_R, _C_SHIN_L, _C_SHIN_R,
     _kp_color, _line_color, _arc_path, _text_pos, _pt, _mid, _coalesce,
+    get_pose_config,
 )
 from angles import KP_CONF_THRESH
 
@@ -48,12 +49,16 @@ from angles import KP_CONF_THRESH
 class DraggableKeypoint(QGraphicsEllipseItem):
     """Draggable keypoint circle.  Notifies skeleton lines and overlays on move."""
 
-    def __init__(self, kp_idx: int, x: float, y: float, conf: float, r: float = KP_RADIUS):
+    def __init__(self, kp_idx: int, x: float, y: float, conf: float, r: float = KP_RADIUS,
+                 kp_names=None, left_kps=None, right_kps=None):
         super().__init__(-r, -r, 2 * r, 2 * r)
-        self.kp_idx = kp_idx
-        self.conf   = conf
-        self._r     = r
-        self._lines: list = []
+        self.kp_idx    = kp_idx
+        self.conf      = conf
+        self._r        = r
+        self._lines:   list = []
+        self._left_kps  = left_kps  if left_kps  is not None else LEFT_KPS
+        self._right_kps = right_kps if right_kps is not None else RIGHT_KPS
+        _names = kp_names if kp_names is not None else COCO_KP_NAMES
 
         self.setPos(x, y)
         self._refresh_style()
@@ -62,12 +67,12 @@ class DraggableKeypoint(QGraphicsEllipseItem):
         self.setAcceptHoverEvents(True)
         self.setZValue(10)
 
-        name = COCO_KP_NAMES[kp_idx] if kp_idx < len(COCO_KP_NAMES) else f"kp{kp_idx}"
+        name = _names[kp_idx] if kp_idx < len(_names) else f"kp{kp_idx}"
         self.setToolTip(f"{kp_idx}: {name}  conf={conf:.2f}")
         self.setCursor(QCursor(Qt.OpenHandCursor))
 
     def _refresh_style(self):
-        self.setBrush(QBrush(_kp_color(self.kp_idx, self.conf)))
+        self.setBrush(QBrush(_kp_color(self.kp_idx, self.conf, self._left_kps, self._right_kps)))
         self.setPen(QPen(QColor(255, 255, 255, 200), 1.5))
 
     def register_line(self, line):
@@ -108,10 +113,12 @@ class DraggableKeypoint(QGraphicsEllipseItem):
 # ── SkeletonLine ───────────────────────────────────────────────────────────────
 
 class SkeletonLine(QGraphicsLineItem):
-    def __init__(self, a: DraggableKeypoint, b: DraggableKeypoint):
+    def __init__(self, a: DraggableKeypoint, b: DraggableKeypoint, left_kps=None, right_kps=None):
         super().__init__()
         self._a, self._b = a, b
-        pen = QPen(_line_color(a.kp_idx, b.kp_idx), LINE_WIDTH)
+        lk = left_kps  if left_kps  is not None else LEFT_KPS
+        rk = right_kps if right_kps is not None else RIGHT_KPS
+        pen = QPen(_line_color(a.kp_idx, b.kp_idx, lk, rk), LINE_WIDTH)
         pen.setCapStyle(Qt.RoundCap)
         self.setPen(pen)
         self.setZValue(5)
@@ -214,17 +221,20 @@ class AngleOverlay:
 class HipHingeOverlay(AngleOverlay):
     """Cyan arc at mid-hip showing torso–thigh angle."""
 
-    def __init__(self, scene):
+    def __init__(self, scene, l_sh=5, r_sh=6, l_hp=11, r_hp=12, l_kn=13, r_kn=14):
         super().__init__(scene, _C_HIP)
+        self._i_l_sh, self._i_r_sh = l_sh, r_sh
+        self._i_l_hp, self._i_r_hp = l_hp, r_hp
+        self._i_l_kn, self._i_r_kn = l_kn, r_kn
         self._l_torso = self._mk_line()
         self._l_thigh = self._mk_line()
         self._arc     = self._mk_arc()
         self._txt     = self._mk_text()
 
     def _update(self, kps) -> bool:
-        l_sh = _pt(kps, 5);  r_sh = _pt(kps, 6)
-        l_hp = _pt(kps, 11); r_hp = _pt(kps, 12)
-        l_kn = _pt(kps, 13); r_kn = _pt(kps, 14)
+        l_sh = _pt(kps, self._i_l_sh); r_sh = _pt(kps, self._i_r_sh)
+        l_hp = _pt(kps, self._i_l_hp); r_hp = _pt(kps, self._i_r_hp)
+        l_kn = _pt(kps, self._i_l_kn); r_kn = _pt(kps, self._i_r_kn)
         mid_sh  = _coalesce(_mid(l_sh,  r_sh),  l_sh,  r_sh)
         mid_hip = _coalesce(_mid(l_hp,  r_hp),  l_hp,  r_hp)
         mid_kn  = _coalesce(_mid(l_kn,  r_kn),  l_kn,  r_kn)
@@ -252,16 +262,18 @@ class HipHingeOverlay(AngleOverlay):
 class TorsoLeanOverlay(AngleOverlay):
     """Amber arc at mid-hip showing torso deviation from vertical."""
 
-    def __init__(self, scene):
+    def __init__(self, scene, l_sh=5, r_sh=6, l_hp=11, r_hp=12):
         super().__init__(scene, _C_TORSO)
+        self._i_l_sh, self._i_r_sh = l_sh, r_sh
+        self._i_l_hp, self._i_r_hp = l_hp, r_hp
         self._l_torso = self._mk_line()
         self._l_ref   = self._mk_line(dashed=True)
         self._arc     = self._mk_arc()
         self._txt     = self._mk_text()
 
     def _update(self, kps) -> bool:
-        l_sh = _pt(kps, 5);  r_sh = _pt(kps, 6)
-        l_hp = _pt(kps, 11); r_hp = _pt(kps, 12)
+        l_sh = _pt(kps, self._i_l_sh); r_sh = _pt(kps, self._i_r_sh)
+        l_hp = _pt(kps, self._i_l_hp); r_hp = _pt(kps, self._i_r_hp)
         mid_sh  = _coalesce(_mid(l_sh, r_sh), l_sh, r_sh)
         mid_hip = _coalesce(_mid(l_hp, r_hp), l_hp, r_hp)
         if mid_sh is None or mid_hip is None:
@@ -288,20 +300,24 @@ class TorsoLeanOverlay(AngleOverlay):
 class KneeFlexOverlay(AngleOverlay):
     """Three-point knee flexion arc (left or right side)."""
 
-    def __init__(self, scene, side: str = "left"):
+    def __init__(self, scene, side: str = "left", hip_i=None, knee_i=None, ankle_i=None):
         color = _C_KNEE_L if side == "left" else _C_KNEE_R
         super().__init__(scene, color)
-        self._side    = side
+        self._side = side
+        # Default COCO-17 indices; overridden by setup_overlays for other formats
+        if hip_i is not None:
+            self._i_hip, self._i_knee, self._i_ankle = hip_i, knee_i, ankle_i
+        elif side == "left":
+            self._i_hip, self._i_knee, self._i_ankle = 11, 13, 15
+        else:
+            self._i_hip, self._i_knee, self._i_ankle = 12, 14, 16
         self._l_upper = self._mk_line()
         self._l_lower = self._mk_line()
         self._arc     = self._mk_arc()
         self._txt     = self._mk_text()
 
     def _update(self, kps) -> bool:
-        if self._side == "left":
-            hip, knee, ankle = _pt(kps, 11), _pt(kps, 13), _pt(kps, 15)
-        else:
-            hip, knee, ankle = _pt(kps, 12), _pt(kps, 14), _pt(kps, 16)
+        hip, knee, ankle = _pt(kps, self._i_hip), _pt(kps, self._i_knee), _pt(kps, self._i_ankle)
         if any(p is None for p in [hip, knee, ankle]):
             return False
         bx, by = float(knee[0]),  float(knee[1])
@@ -326,20 +342,23 @@ class KneeFlexOverlay(AngleOverlay):
 class ShinLeanOverlay(AngleOverlay):
     """Shin lean from vertical (knee → ankle vs downward reference)."""
 
-    def __init__(self, scene, side: str = "left"):
+    def __init__(self, scene, side: str = "left", knee_i=None, ankle_i=None):
         color = _C_SHIN_L if side == "left" else _C_SHIN_R
         super().__init__(scene, color)
-        self._side   = side
+        self._side = side
+        if knee_i is not None:
+            self._i_knee, self._i_ankle = knee_i, ankle_i
+        elif side == "left":
+            self._i_knee, self._i_ankle = 13, 15
+        else:
+            self._i_knee, self._i_ankle = 14, 16
         self._l_shin = self._mk_line()
         self._l_ref  = self._mk_line(dashed=True)
         self._arc    = self._mk_arc()
         self._txt    = self._mk_text()
 
     def _update(self, kps) -> bool:
-        if self._side == "left":
-            knee, ankle = _pt(kps, 13), _pt(kps, 15)
-        else:
-            knee, ankle = _pt(kps, 14), _pt(kps, 16)
+        knee, ankle = _pt(kps, self._i_knee), _pt(kps, self._i_ankle)
         if knee is None or ankle is None:
             return False
         kx, ky = float(knee[0]),  float(knee[1])
@@ -386,6 +405,11 @@ class PoseScene(QGraphicsScene):
         self._show_kp_indices: bool                 = False
         self._kp_label_font = QFont("Monospace", 7)
         self._kp_label_font.setBold(True)
+        self._pose_cfg: dict = get_pose_config(17)
+
+    def set_pose_config(self, cfg: dict):
+        """Switch the active skeleton format (e.g. COCO-17 ↔ SMPL-45)."""
+        self._pose_cfg = cfg
 
     # ── Background ────────────────────────────────────────────────────────────
 
@@ -405,10 +429,16 @@ class PoseScene(QGraphicsScene):
 
     def load_keypoints(self, kps: list, editable: bool = True):
         self._clear_pose()
+        cfg = self._pose_cfg
+        kp_names  = cfg["kp_names"]
+        skeleton  = cfg["skeleton"]
+        left_kps  = cfg["left_kps"]
+        right_kps = cfg["right_kps"]
         n = len(kps)
         for idx, kp in enumerate(kps):
             x, y, conf = float(kp[0]), float(kp[1]), (float(kp[2]) if len(kp) > 2 else 1.0)
-            item = DraggableKeypoint(idx, x, y, conf)
+            item = DraggableKeypoint(idx, x, y, conf,
+                                     kp_names=kp_names, left_kps=left_kps, right_kps=right_kps)
             item.setFlag(QGraphicsItem.ItemIsMovable, editable)
             self.addItem(item)
             self._kps.append(item)
@@ -420,9 +450,9 @@ class PoseScene(QGraphicsScene):
             lbl.setVisible(self._show_kp_indices)
             self.addItem(lbl)
             self._kp_labels.append(lbl)
-        for i, j in COCO_SKELETON:
+        for i, j in skeleton:
             if i < n and j < n:
-                ln = SkeletonLine(self._kps[i], self._kps[j])
+                ln = SkeletonLine(self._kps[i], self._kps[j], left_kps, right_kps)
                 self.addItem(ln)
                 self._lines.append(ln)
         self._undo.clear()
@@ -482,16 +512,21 @@ class PoseScene(QGraphicsScene):
     # ── Overlays ──────────────────────────────────────────────────────────────
 
     def setup_overlays(self):
-        """Create overlay objects.  Called once after scene is ready."""
+        """Create overlay objects using current pose config joint indices."""
         for key, ov in self._overlays.items():
             ov.remove()
+        cfg = self._pose_cfg
+        l_sh, r_sh = cfg["shoulder_l"], cfg["shoulder_r"]
+        l_hp, r_hp = cfg["hip_l"],      cfg["hip_r"]
+        l_kn, r_kn = cfg["knee_l"],     cfg["knee_r"]
+        l_an, r_an = cfg["ankle_l"],    cfg["ankle_r"]
         self._overlays = {
-            "hip_hinge":  HipHingeOverlay(self),
-            "torso_lean": TorsoLeanOverlay(self),
-            "knee_l":     KneeFlexOverlay(self, "left"),
-            "knee_r":     KneeFlexOverlay(self, "right"),
-            "shin_l":     ShinLeanOverlay(self, "left"),
-            "shin_r":     ShinLeanOverlay(self, "right"),
+            "hip_hinge":  HipHingeOverlay(self, l_sh, r_sh, l_hp, r_hp, l_kn, r_kn),
+            "torso_lean": TorsoLeanOverlay(self, l_sh, r_sh, l_hp, r_hp),
+            "knee_l":     KneeFlexOverlay(self, "left",  hip_i=l_hp, knee_i=l_kn, ankle_i=l_an),
+            "knee_r":     KneeFlexOverlay(self, "right", hip_i=r_hp, knee_i=r_kn, ankle_i=r_an),
+            "shin_l":     ShinLeanOverlay(self, "left",  knee_i=l_kn, ankle_i=l_an),
+            "shin_r":     ShinLeanOverlay(self, "right", knee_i=r_kn, ankle_i=r_an),
         }
 
     def set_overlay_visible(self, key: str, v: bool):

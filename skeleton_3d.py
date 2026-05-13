@@ -50,7 +50,7 @@ try:
 except ImportError:
     _GL_OK = False
 
-from constants import COCO_SKELETON, LEFT_KPS, RIGHT_KPS
+from constants import COCO_SKELETON, LEFT_KPS, RIGHT_KPS, get_pose_config
 
 # ── Colour palette (RGBA float32, mirrors 2D editor conventions) ───────────────
 
@@ -60,35 +60,32 @@ _C_CENTER = (0.85, 0.80, 0.20, 1.0)   # amber  — centre (nose)
 _C_GRID   = (0.31, 0.31, 0.31, 0.70)
 
 
-def _joint_colors() -> np.ndarray:
-    """Return (17, 4) float32 RGBA per joint."""
-    c = np.zeros((17, 4), dtype=np.float32)
-    for i in range(17):
-        c[i] = _C_LEFT if i in LEFT_KPS else (_C_RIGHT if i in RIGHT_KPS else _C_CENTER)
+def _build_joint_colors(n: int, left_kps: set, right_kps: set) -> np.ndarray:
+    """Return (n, 4) float32 RGBA per joint."""
+    c = np.zeros((n, 4), dtype=np.float32)
+    for i in range(n):
+        c[i] = _C_LEFT if i in left_kps else (_C_RIGHT if i in right_kps else _C_CENTER)
     return c
 
 
-def _bone_color(a: int, b: int) -> tuple:
-    if a in LEFT_KPS and b in LEFT_KPS:
-        return _C_LEFT
-    if a in RIGHT_KPS and b in RIGHT_KPS:
-        return _C_RIGHT
-    return _C_CENTER
-
-
-def _build_bone_colors() -> np.ndarray:
-    """Return (len(COCO_SKELETON)*2, 4) colour array for GLLinePlotItem pairs."""
-    n = len(COCO_SKELETON)
+def _build_bone_colors_for(skeleton: list, left_kps: set, right_kps: set) -> np.ndarray:
+    """Return (len(skeleton)*2, 4) colour array for GLLinePlotItem pairs."""
+    n = len(skeleton)
     c = np.zeros((n * 2, 4), dtype=np.float32)
-    for i, (a, b) in enumerate(COCO_SKELETON):
-        col = _bone_color(a, b)
+    for i, (a, b) in enumerate(skeleton):
+        if a in left_kps and b in left_kps:
+            col = _C_LEFT
+        elif a in right_kps and b in right_kps:
+            col = _C_RIGHT
+        else:
+            col = _C_CENTER
         c[i * 2] = c[i * 2 + 1] = col
     return c
 
 
-# Precomputed constants — built once at import time
-_JOINT_COLORS = _joint_colors()
-_BONE_COLORS  = _build_bone_colors()
+# Precomputed defaults for COCO-17 (used until load_player is called)
+_JOINT_COLORS = _build_joint_colors(17, LEFT_KPS, RIGHT_KPS)
+_BONE_COLORS  = _build_bone_colors_for(COCO_SKELETON, LEFT_KPS, RIGHT_KPS)
 _N_BONES      = len(COCO_SKELETON)
 
 
@@ -227,16 +224,14 @@ class Skeleton3DPanel(QWidget):
         "Free":      None,
     }
 
-    # Trunk + limb joints used for camera auto-scaling.
-    # Head joints (0–4: nose, eyes, ears) are excluded because 3D lifting
-    # often produces large depth errors for face keypoints from side-on cameras.
-    _SCALE_JOINTS = [5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16]
-
     def __init__(self, parent=None):
         super().__init__(parent)
         self._frames_3d: dict[int, np.ndarray] = {}
         self._current_frame: int = -1
+        self._cfg: dict = get_pose_config(17)
         self._bone_pts = np.zeros((_N_BONES * 2, 3), dtype=np.float32)
+        self._joint_colors = _JOINT_COLORS
+        self._bone_colors  = _BONE_COLORS
         self._label_items: list = []
         self._current_view: str = "Frontal"
 
@@ -361,9 +356,10 @@ class Skeleton3DPanel(QWidget):
                               color=(200, 200, 200, 180))
             self._gl.addItem(t)
 
+        n_kps = self._cfg["n"]
         self._joint_item = gl.GLScatterPlotItem(
-            pos=np.zeros((17, 3), dtype=np.float32),
-            color=_JOINT_COLORS,
+            pos=np.zeros((n_kps, 3), dtype=np.float32),
+            color=self._joint_colors,
             size=8.0,
             pxMode=True,
         )
@@ -372,7 +368,7 @@ class Skeleton3DPanel(QWidget):
         # All bones as interleaved pairs in one GLLinePlotItem (mode='lines')
         self._bone_item = gl.GLLinePlotItem(
             pos=self._bone_pts.copy(),
-            color=_BONE_COLORS,
+            color=self._bone_colors,
             width=2.0,
             antialias=True,
             mode='lines',
@@ -381,7 +377,7 @@ class Skeleton3DPanel(QWidget):
 
         # Per-joint index labels
         self._label_items: list = []
-        for i in range(17):
+        for i in range(n_kps):
             t = gl.GLTextItem(
                 pos=np.array([0.0, 0.0, 0.0]),
                 text=str(i),
@@ -416,17 +412,78 @@ class Skeleton3DPanel(QWidget):
         for lbl in self._label_items:
             lbl.setVisible(v)
 
-    def load_player(self, frames_3d: dict):
+    def _reconfigure_gl(self, cfg: dict):
+        """Rebuild GL items when the keypoint format changes (e.g. 17 → 45)."""
+        if not _GL_OK or not hasattr(self, '_gl'):
+            self._cfg = cfg
+            return
+        n_kps    = cfg["n"]
+        skeleton = cfg["skeleton"]
+        left_kps = cfg["left_kps"]
+        right_kps = cfg["right_kps"]
+
+        jc = _build_joint_colors(n_kps, left_kps, right_kps)
+        bc = _build_bone_colors_for(skeleton, left_kps, right_kps)
+
+        # Remove old items
+        self._gl.removeItem(self._joint_item)
+        self._gl.removeItem(self._bone_item)
+        for lbl in self._label_items:
+            self._gl.removeItem(lbl)
+
+        # Rebuild
+        n_bones = len(skeleton)
+        self._bone_pts     = np.zeros((n_bones * 2, 3), dtype=np.float32)
+        self._joint_colors = jc
+        self._bone_colors  = bc
+
+        self._joint_item = gl.GLScatterPlotItem(
+            pos=np.zeros((n_kps, 3), dtype=np.float32),
+            color=jc, size=8.0, pxMode=True,
+        )
+        self._gl.addItem(self._joint_item)
+
+        self._bone_item = gl.GLLinePlotItem(
+            pos=self._bone_pts.copy(), color=bc,
+            width=2.0, antialias=True, mode='lines',
+        )
+        self._gl.addItem(self._bone_item)
+
+        self._label_items = []
+        for i in range(n_kps):
+            t = gl.GLTextItem(
+                pos=np.array([0.0, 0.0, 0.0]),
+                text=str(i), color=(220, 220, 220, 255),
+            )
+            self._gl.addItem(t)
+            self._label_items.append(t)
+
+        self._cfg = cfg
+
+    def load_player(self, frames_3d: dict, n_keypoints: int = 17):
         """
         Set 3D frame data for a player.
 
         Parameters
         ----------
-        frames_3d : dict mapping video_frame_index (int) → np.ndarray (17, 3)
-                    Coordinates in metres, Y-down camera space (head at small Y,
-                    feet at large Y). _render negates Y for display.
-                    Pass None or empty dict to show the no-data placeholder.
+        frames_3d    : dict mapping video_frame_index → np.ndarray (N, 3)
+                       Coordinates in metres, Y-down camera space.
+        n_keypoints  : hint from the 2D JSON; the actual 3D joint count may
+                       differ (e.g. MotionAGFormer always outputs 17 even for
+                       45-kp 2D files).  We use the actual data shape.
         """
+        # Detect actual 3D joint count from data — it may differ from the 2D count
+        actual_n = n_keypoints
+        if frames_3d:
+            sample = next(iter(frames_3d.values()))
+            actual_n = int(sample.shape[0])
+
+        new_cfg = get_pose_config(actual_n)
+        if new_cfg["n"] != self._cfg["n"] and _GL_OK and hasattr(self, '_gl'):
+            self._reconfigure_gl(new_cfg)
+        else:
+            self._cfg = new_cfg
+
         self._frames_3d    = frames_3d or {}
         self._current_frame = -1
 
@@ -436,13 +493,14 @@ class Skeleton3DPanel(QWidget):
         if self._frames_3d:
             self._no_data.hide()
             self._gl.show()
-            # Auto-scale camera using trunk/limb joints only (head joints
-            # excluded — face keypoints have unreliable depth from lifting)
-            sample  = next(iter(self._frames_3d.values())).astype(np.float32)
-            root    = (sample[11] + sample[12]) / 2.0
-            trunk   = sample[self._SCALE_JOINTS] - root
-            extent  = float(np.max(np.abs(trunk))) * 2.0
-            dist    = float(np.clip(extent * 2.0, 1.0, 4.0))
+            sample      = next(iter(self._frames_3d.values())).astype(np.float32)
+            hip_l       = self._cfg["hip_l"]
+            hip_r       = self._cfg["hip_r"]
+            scale_joints = self._cfg["scale_joints"]
+            root        = (sample[hip_l] + sample[hip_r]) / 2.0
+            trunk       = sample[scale_joints] - root
+            extent      = float(np.max(np.abs(trunk))) * 2.0
+            dist        = float(np.clip(extent * 2.0, 1.0, 4.0))
             self._auto_dist = dist
             preset = self._PRESETS.get(self._current_view)
             if preset:
@@ -476,34 +534,32 @@ class Skeleton3DPanel(QWidget):
         """
         Push new keypoint positions to GL items without re-allocating.
 
-        Coordinate pipeline (see module docstring for full derivation):
-          1. Centre on mid-hip (COCO 11=L-hip, 12=R-hip).
-          2. Negate Y  → Y-up world space (head +Y, feet -Y).
-          3. Sagittal only: swap X↔Z so depth axis reads as horizontal.
+        Coordinate pipeline:
+          1. Centre on mid-hip.
+          2. Negate Y  → Y-up world space.
+          3. Sagittal only: swap X↔Z.
           4. Swap Y↔Z  → pyqtgraph Z-up display space.
         """
-        pts = kps.astype(np.float32).copy()
-        root = (pts[11] + pts[12]) / 2.0
+        pts  = kps.astype(np.float32).copy()
+        hip_l, hip_r = self._cfg["hip_l"], self._cfg["hip_r"]
+        root = (pts[hip_l] + pts[hip_r]) / 2.0
         pts -= root
-        pts[:, 0] *= self._x_scale_corr                                 # restore W/H aspect ratio
+        pts[:, 0] *= self._x_scale_corr
         if self._current_view == "Sagittal":
-            pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()  # X↔Z
-        pts[:, 1], pts[:, 2] = pts[:, 2].copy(), pts[:, 1].copy()      # Y↔Z → pg Z-up
+            pts[:, 0], pts[:, 2] = pts[:, 2].copy(), pts[:, 0].copy()
+        pts[:, 1], pts[:, 2] = pts[:, 2].copy(), pts[:, 1].copy()
 
-        # Update joint positions
-        self._joint_item.setData(pos=pts, color=_JOINT_COLORS, size=8.0, pxMode=True)
+        self._joint_item.setData(pos=pts, color=self._joint_colors, size=8.0, pxMode=True)
 
-        # Update bone positions — write pairs into the pre-allocated buffer
-        for i, (a, b) in enumerate(COCO_SKELETON):
+        for i, (a, b) in enumerate(self._cfg["skeleton"]):
             self._bone_pts[i * 2]     = pts[a]
             self._bone_pts[i * 2 + 1] = pts[b]
         self._bone_item.setData(pos=self._bone_pts,
-                                color=_BONE_COLORS,
+                                color=self._bone_colors,
                                 width=2.0,
                                 antialias=True,
                                 mode='lines')
 
-        # Update index labels — offset slightly so they don't overlap the dot
         for i, lbl in enumerate(self._label_items):
             lbl.setData(pos=pts[i] + np.array([0.01, 0.01, 0.0], dtype=np.float32))
 
